@@ -1,0 +1,37 @@
+# architecture docs (uncooked — kept local until polished)
+docs/
+
+# Claude Code config (local-only)
+.claude/
+
+# CLAUDE.md (uncooked — kept local until polished)
+CLAUDE.md
+
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+wheels/
+.venv/
+venv/
+env/
+.env
+.env.local
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.DS_Store
+.idea/
+.vscode/
+*.log
+*.sqlite
+*.db
+*.duckdb
+.claude/settings.local.json
