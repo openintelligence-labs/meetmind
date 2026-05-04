@@ -1,7 +1,7 @@
 # MeetMind
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Powered by agentic-kit](https://img.shields.io/badge/powered%20by-agentic--kit-7c3aed)](https://github.com/openintelligence-labs/agentic-kit)
+[![Powered by actants](https://img.shields.io/badge/powered%20by-actants-7c3aed)](https://github.com/openintelligence-labs/actants)
 
 > **Open source alternative to Otter.ai ($17/mo) and Fireflies ($19/mo).** Local AI meeting assistant. Records system audio (no bot joins your call), transcribes with Whisper.cpp, summarizes with Ollama, extracts action items. 100% on your machine.
 
@@ -26,7 +26,7 @@ meetmind summarize <meeting_id>
 |---|---|
 | System audio capture | No bot needed — records whatever plays |
 | Whisper.cpp transcription | Fast local STT, CPU or GPU |
-| AI summary | TL;DR, key decisions, action items (via agentic-kit) |
+| AI summary | TL;DR, key decisions, action items (via actants) |
 | Speaker diarization | Who said what |
 | Searchable archive | SQLite-backed, find any past meeting |
 | Calendar integration | Auto-start on meeting events (planned) |
@@ -37,13 +37,13 @@ meetmind summarize <meeting_id>
 - [x] CLI skeleton
 - [ ] Audio capture (sounddevice)
 - [ ] Whisper.cpp wrapper
-- [ ] LLM summarizer using agentic-kit
+- [ ] LLM summarizer using actants
 - [ ] SQLite archive
 - [ ] Electron/Tauri desktop app
 
 ## Part of the Open Intelligence Labs ecosystem
 
-- [agentic-kit](https://github.com/openintelligence-labs/agentic-kit) — shared SDK
+- [actants](https://github.com/openintelligence-labs/actants) — shared SDK
 - [SecondBrain](https://github.com/openintelligence-labs/secondbrain) — personal memory (meeting context flows in)
 - [DeepDive](https://github.com/openintelligence-labs/deepdive) — deep research agent
 
