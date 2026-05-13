@@ -1,0 +1,4 @@
+# Cargo / Tauri build outputs
+target/
+gen/
+Cargo.lock

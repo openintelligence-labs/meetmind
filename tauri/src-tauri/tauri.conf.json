@@ -1,0 +1,52 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "MeetMind",
+  "version": "0.13.0",
+  "identifier": "com.openintelligence.meetmind",
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "",
+    "frontendDist": "../ui",
+    "devUrl": "http://localhost:1420"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "overlay",
+        "title": "MeetMind",
+        "width": 480,
+        "height": 360,
+        "minWidth": 320,
+        "minHeight": 200,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "shadow": false,
+        "resizable": true,
+        "skipTaskbar": true,
+        "url": "index.html"
+      }
+    ],
+    "macOSPrivateApi": true,
+    "security": {
+      "csp": "default-src 'self'; connect-src http://127.0.0.1:* ws://127.0.0.1:*; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    },
+    "trayIcon": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true
+    }
+  },
+  "plugins": {},
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "app"],
+    "icon": ["icons/icon.icns", "icons/icon.png"],
+    "category": "Productivity",
+    "shortDescription": "Local-first meeting assistant",
+    "longDescription": "Bot-free, GDPR-trivial meeting notetaker. Runs entirely on your laptop.",
+    "macOS": {
+      "minimumSystemVersion": "14.4",
+      "frameworks": []
+    }
+  }
+}

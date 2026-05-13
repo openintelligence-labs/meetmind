@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MeetMind</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,700;1,400&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,700;1,6..72,400&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body data-mode="overlay">
+    <!-- ─────────────────────── TITLE BAR ─────────────────────── -->
+    <header class="bar">
+      <div class="bar-left">
+        <span class="dot" id="status-dot" title="connection"></span>
+        <span class="wordmark">
+          <span class="wm-meet">Meet</span><span class="wm-mind">Mind</span>
+        </span>
+        <span class="bar-sep"></span>
+        <span class="session-meta" id="session-meta">
+          <span class="session-state" id="session-state">awaiting&nbsp;signal</span>
+          <span class="session-timer" id="session-timer">00:00</span>
+        </span>
+      </div>
+      <div class="bar-right">
+        <button id="toggle-mode" class="bar-btn" title="overlay / dashboard">
+          <span class="mode-overlay">overlay</span>
+          <span class="mode-dashboard">dashboard</span>
+        </button>
+        <button id="close" class="bar-btn icon" title="hide overlay">×</button>
+      </div>
+    </header>
+
+    <!-- ─────────────────────── COACH TIPS ─────────────────────── -->
+    <aside class="coach" id="coach" hidden>
+      <div class="coach-card">
+        <span class="coach-cat" id="coach-cat">tip</span>
+        <p class="coach-text" id="coach-text"></p>
+        <button class="coach-close" id="coach-close" title="dismiss">×</button>
+        <span class="coach-pin"></span>
+      </div>
+    </aside>
+
+    <!-- ─────────────────────── OVERLAY MODE ─────────────────────── -->
+    <main class="overlay-shell">
+      <section class="transcript" id="captions" aria-live="polite">
+        <div class="hint" id="hint">
+          <span class="hint-cursor"></span>
+          <span class="hint-text"
+            >Listening. Captions will appear here once audio reaches the
+            sidecar.</span
+          >
+          <p class="hint-sub">
+            Start a recording with
+            <code>meetmind record --emit-sse</code> in another terminal, or run
+            <code>meetmind demo --stream loopback</code> to capture system
+            audio.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <!-- ─────────────────────── DASHBOARD MODE ─────────────────────── -->
+    <div class="dashboard">
+      <!-- LEFT: meetings list + search -->
+      <aside class="dash-side">
+        <div class="dash-recorder" id="dash-recorder">
+          <div class="rec-row">
+            <input
+              type="text"
+              id="rec-title"
+              placeholder="meeting title…"
+              spellcheck="false"
+              autocomplete="off"
+            />
+          </div>
+          <div class="rec-row">
+            <select id="rec-stream" class="rec-select">
+              <option value="both" selected>both streams</option>
+              <option value="loopback">system audio</option>
+              <option value="mic">microphone</option>
+            </select>
+            <button id="rec-toggle" class="rec-btn">
+              <span class="rec-dot"></span>
+              <span class="rec-label">record</span>
+            </button>
+          </div>
+          <div class="rec-status" id="rec-status" hidden>
+            <span class="rec-pulse"></span>
+            <span id="rec-status-text">recording</span>
+            <span id="rec-elapsed" class="rec-elapsed">00:00</span>
+          </div>
+        </div>
+        <div class="dash-search">
+          <input
+            type="text"
+            id="search-input"
+            placeholder="search transcripts…"
+            spellcheck="false"
+            autocomplete="off"
+          />
+          <span class="dash-search-icon">⌕</span>
+        </div>
+        <div class="dash-meetings" id="meeting-list">
+          <div class="skeleton-list">
+            <div class="skel-line"></div>
+            <div class="skel-line short"></div>
+            <div class="skel-line"></div>
+            <div class="skel-line medium"></div>
+            <div class="skel-line"></div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- CENTER: selected meeting / search results -->
+      <section class="dash-main" id="dash-main">
+        <div class="dash-empty">
+          <div class="empty-mark">M·M</div>
+          <p>Select a meeting from the left, or search the archive.</p>
+        </div>
+      </section>
+
+      <!-- RIGHT: metadata + actions + decisions -->
+      <aside class="dash-meta" id="dash-meta" hidden>
+        <div class="dash-meta-section" id="meta-tools">
+          <h3>Tools</h3>
+          <button id="btn-summarize" class="tool-btn">
+            <span class="tool-icon">⌬</span>
+            <span class="tool-label">summarize</span>
+          </button>
+          <div class="tool-hint" id="summarize-hint"></div>
+          <div class="tool-divider"></div>
+          <button id="btn-rename" class="tool-btn" title="rename meeting">
+            <span class="tool-icon">✎</span>
+            <span class="tool-label">rename</span>
+          </button>
+          <button id="btn-delete" class="tool-btn danger" title="delete meeting + cascade">
+            <span class="tool-icon">⌫</span>
+            <span class="tool-label">delete</span>
+          </button>
+          <div class="tool-hint" id="manage-hint"></div>
+          <div class="tool-divider"></div>
+          <div class="tool-label-small">export</div>
+          <button id="btn-export-obsidian" class="tool-btn" title="export to an Obsidian vault">
+            <span class="tool-icon">◇</span>
+            <span class="tool-label">obsidian</span>
+          </button>
+          <button id="btn-export-slack" class="tool-btn" title="post a digest to Slack">
+            <span class="tool-icon">#</span>
+            <span class="tool-label">slack</span>
+          </button>
+          <button id="btn-export-github" class="tool-btn" title="open issues from open actions">
+            <span class="tool-icon">⌥</span>
+            <span class="tool-label">github</span>
+          </button>
+          <div class="tool-hint" id="export-hint"></div>
+          <div class="tool-divider"></div>
+          <button id="btn-diarize" class="tool-btn" title="post-hoc diarization on persisted audio">
+            <span class="tool-icon">◫</span>
+            <span class="tool-label">diarize</span>
+          </button>
+          <div class="tool-hint" id="diarize-hint"></div>
+        </div>
+        <div class="dash-meta-section" id="meta-actions">
+          <h3>Action items</h3>
+          <div class="meta-empty">None extracted.</div>
+        </div>
+        <div class="dash-meta-section" id="meta-decisions">
+          <h3>Decisions</h3>
+          <div class="meta-empty">None recorded.</div>
+        </div>
+        <div class="dash-meta-section" id="meta-attendees">
+          <h3>Voices heard</h3>
+          <div class="meta-empty">No speakers identified.</div>
+        </div>
+        <div class="dash-meta-section" id="meta-compliance">
+          <h3>Compliance</h3>
+          <div class="meta-empty">loading…</div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- ─────────────────────── FOOTER (connection controls) ─────────────────────── -->
+    <footer class="controls" id="controls">
+      <span class="controls-label">endpoint</span>
+      <input
+        id="endpoint"
+        type="text"
+        value="http://127.0.0.1:7857"
+        spellcheck="false"
+      />
+      <span class="controls-label">token</span>
+      <input
+        id="token"
+        type="password"
+        placeholder="bearer"
+        spellcheck="false"
+        autocomplete="off"
+      />
+      <button id="connect" class="btn-connect">connect</button>
+    </footer>
+
+    <script type="module" src="/static/app.js"></script>
+    <script type="module" src="/static/dashboard.js"></script>
+  </body>
+</html>
