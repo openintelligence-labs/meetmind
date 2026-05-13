@@ -4,21 +4,65 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "meetmind"
-version = "0.1.0"
-description = "Local AI meeting assistant — open source alternative to Otter.ai."
+version = "0.1.0.dev0"
+description = "Local-first meeting assistant. Audio + transcripts stay on your device; bring your own LLM (Ollama, OpenAI, Anthropic, …)."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.12"
 dependencies = [
-    "actants>=0.1.0",
+    # core
+    "actants>=0.3.0",
     "click>=8.1",
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
     "python-ulid>=2.7",
+    # async + IO
+    "anyio>=4.3",
+    "httpx>=0.27",
+    "aiofiles>=23.2",
+    # audio + numerics
+    "numpy>=1.26",
+    "soundfile>=0.12",
+    # crypto + storage
+    "cryptography>=42.0",
+    "keyring>=25.0",
+    "aiosqlite>=0.20",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.4"]
+# storage extras (heavy native deps; optional)
+storage = [
+    "lancedb>=0.10",
+]
+# audio pipeline extras (ONNX models for VAD, denoise, voiceprint)
+audio = [
+    "onnxruntime>=1.18",
+    "webrtcvad>=2.0",
+]
+# local API server (SSE for live transcripts, FastAPI on 127.0.0.1)
+api = [
+    "fastapi>=0.110",
+    "uvicorn>=0.30",
+    "sse-starlette>=2.0",
+]
+# at-rest encryption (SQLCipher driver). Without this extra MeetMind opens
+# the DB unencrypted and `meetmind status` reports `storage.mode = unencrypted`.
+encrypted = [
+    "pysqlcipher3>=1.2",
+]
+# dev tooling
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "pytest-timeout>=2.3",
+    "ruff>=0.5",
+    "import-linter>=2.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.30",
+    "sse-starlette>=2.0",
+    "httpx>=0.27",
+]
 
 [project.scripts]
 meetmind = "meetmind.cli:main"
@@ -36,3 +80,90 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "A", "C4", "SIM"]
+
+# DPIA module is mostly a Markdown template embedded in a Python string;
+# line-length doesn't apply to inline tables.
+[tool.ruff.lint.per-file-ignores]
+"src/meetmind/compliance/dpia.py" = ["E501"]
+
+# Module-boundary lint (S0.5). Wired in CI.
+[tool.importlinter]
+root_package = "meetmind"
+
+[[tool.importlinter.contracts]]
+name = "capture is leaf for upstream pipeline"
+type = "forbidden"
+source_modules = ["meetmind.capture"]
+forbidden_modules = [
+    "meetmind.stt",
+    "meetmind.diarize",
+    "meetmind.analyze",
+    "meetmind.memory",
+    "meetmind.integrations",
+    "meetmind.api",
+    "meetmind.assist",
+]
+
+[[tool.importlinter.contracts]]
+name = "stt does not depend on diarize"
+type = "forbidden"
+source_modules = ["meetmind.stt"]
+forbidden_modules = [
+    "meetmind.diarize",
+    "meetmind.analyze",
+    "meetmind.memory",
+    "meetmind.integrations",
+    "meetmind.api",
+    "meetmind.assist",
+]
+
+[[tool.importlinter.contracts]]
+name = "diarize does not depend on capture audio or analyze"
+type = "forbidden"
+source_modules = ["meetmind.diarize"]
+forbidden_modules = [
+    "meetmind.capture",
+    "meetmind.analyze",
+    "meetmind.memory",
+    "meetmind.integrations",
+    "meetmind.api",
+    "meetmind.assist",
+]
+
+[[tool.importlinter.contracts]]
+name = "analyze never touches audio"
+type = "forbidden"
+source_modules = ["meetmind.analyze"]
+forbidden_modules = [
+    "meetmind.capture",
+    "meetmind.api",
+]
+
+[[tool.importlinter.contracts]]
+name = "integrations is a leaf"
+type = "forbidden"
+source_modules = ["meetmind.integrations"]
+forbidden_modules = [
+    "meetmind.capture",
+    "meetmind.stt",
+    "meetmind.diarize",
+    "meetmind.analyze",
+    "meetmind.memory",
+    "meetmind.api",
+    "meetmind.assist",
+]
+
+[[tool.importlinter.contracts]]
+name = "crypto is a leaf"
+type = "forbidden"
+source_modules = ["meetmind.crypto"]
+forbidden_modules = [
+    "meetmind.capture",
+    "meetmind.stt",
+    "meetmind.diarize",
+    "meetmind.analyze",
+    "meetmind.memory",
+    "meetmind.integrations",
+    "meetmind.api",
+    "meetmind.assist",
+]

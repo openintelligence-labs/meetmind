@@ -1,12 +1,14 @@
-# architecture docs (uncooked — kept local until polished)
+# ─── architecture docs (uncooked — kept local until polished) ───
 docs/
 
-# Claude Code config (local-only)
+# ─── Claude Code config (local-only) ───
 .claude/
+.claude/settings.local.json
 
-# CLAUDE.md (uncooked — kept local until polished)
+# ─── uncooked dev docs ───
 CLAUDE.md
 
+# ─── Python ───
 __pycache__/
 *.py[cod]
 *$py.class
@@ -20,18 +22,73 @@ wheels/
 .venv/
 venv/
 env/
-.env
-.env.local
+
+# ─── Python tooling caches ───
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.import_linter_cache/
 .coverage
+.coverage.*
 htmlcov/
-.DS_Store
-.idea/
-.vscode/
-*.log
+
+# ─── Swift sidecars (684 MB of build outputs) ───
+sidecars/**/.build/
+
+# ─── Tauri / Rust (mirrored from tauri/src-tauri/.gitignore) ───
+target/
+gen/
+Cargo.lock
+
+# ─── frontend (Tauri UI may grow these) ───
+node_modules/
+.next/
+.cache/
+*.tsbuildinfo
+
+# ─── Generated test fixtures (recreated each run) ───
+tests/fixtures/_mock_*_launcher.sh
+
+# ─── User data — NEVER commit recordings or local archives ───
+# Triggered if anyone sets MEETMIND_HOME to a path in-repo.
+data/
+audio/
+meetmind/data/
+meetmind/audio/
+*.wav
+*.flac
+*.m4a
+*.mp3
 *.sqlite
 *.db
+*.db-wal
+*.db-shm
 *.duckdb
-.claude/settings.local.json
+
+# ─── Secrets / credentials (defensive) ───
+.env
+.env.*
+secrets.*
+*.pem
+*.key
+*.p12
+*.crt
+id_rsa*
+# matches the bearer-token file at $MEETMIND_HOME/token if MEETMIND_HOME is in-repo
+token
+
+# ─── Editor / OS junk ───
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.bak
+*.orig
+.AppleDouble
+.LSOverride
+
+# ─── Logs ───
+*.log
