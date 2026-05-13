@@ -1,7 +1,7 @@
 # ─── architecture docs (uncooked — kept local until polished) ───
 docs/
 
-# ─── Claude Code config (local-only) ───
+# ─── local tooling config ───
 .claude/
 .claude/settings.local.json
 
