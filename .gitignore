@@ -90,5 +90,8 @@ Thumbs.db
 .AppleDouble
 .LSOverride
 
+# ─── design references (kept locally, not tracked) ───
+mockups/
+
 # ─── Logs ───
 *.log
