@@ -12,7 +12,14 @@ import asyncio
 import sys
 from pathlib import Path
 
+import pytest
+
 from meetmind.ipc.protocol import SidecarProcess
+
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="test fixtures are POSIX shell launchers; Windows support tracked in issue #3",
+)
 
 
 def _make_crash_sidecar(tmp_path: Path) -> Path:

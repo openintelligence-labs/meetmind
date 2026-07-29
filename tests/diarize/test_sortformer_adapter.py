@@ -13,6 +13,11 @@ from meetmind.diarize.base import DiarSegment
 from meetmind.diarize.live import SortformerSidecarBackend
 from meetmind.ipc import StreamId
 
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="test fixtures are POSIX shell launchers; Windows support tracked in issue #3",
+)
+
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "mock_diar_sidecar.py"
 
 

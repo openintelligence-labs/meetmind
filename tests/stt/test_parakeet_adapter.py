@@ -13,6 +13,11 @@ from meetmind.ipc import StreamId
 from meetmind.stt.base import Final, Partial
 from meetmind.stt.parakeet_v3 import ParakeetSidecarBackend
 
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="test fixtures are POSIX shell launchers; Windows support tracked in issue #3",
+)
+
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "mock_stt_sidecar.py"
 
 

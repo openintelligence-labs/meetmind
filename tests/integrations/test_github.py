@@ -7,6 +7,7 @@ to ``tmp_path`` and pointing the integration at it via ``gh_binary=``.
 from __future__ import annotations
 
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,11 @@ from meetmind.integrations.github import (
 )
 from meetmind.memory.store import Store
 from meetmind.models import ActionItem, Meeting
+
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="test fixtures are POSIX shell launchers; Windows support tracked in issue #3",
+)
 
 
 def _write_stub_gh(tmp_path: Path, exit_code: int = 0, stdout: str = "") -> Path:

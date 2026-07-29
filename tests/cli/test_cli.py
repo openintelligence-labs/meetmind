@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 
 import pytest
 from click.testing import CliRunner
@@ -52,6 +53,10 @@ def test_record_help_documents_options():
 
 
 @pytest.mark.timeout(30)
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="mock sidecars are POSIX shell launchers; Windows support tracked in issue #3",
+)
 def test_record_with_mock_sidecars_emits_transcript():
     """End-to-end smoke: capture mock → pipeline → STT mock → stdout.
 
