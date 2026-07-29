@@ -29,7 +29,7 @@ echo "smoke: meetmind record --mock --duration 1.0"
     exit 1
 }
 
-if grep -E '\[partial|\[final|the quick|fox|dog' "$OUT" >/dev/null; then
+if grep -E 'mic (partial|final)|snowflake' "$OUT" >/dev/null; then
     echo "smoke: PASS"
 else
     echo "smoke: FAIL — no transcript markers in output" >&2
