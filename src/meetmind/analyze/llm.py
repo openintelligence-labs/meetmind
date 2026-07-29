@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 from collections.abc import Callable
 from typing import Any, TypeVar
 
@@ -152,36 +153,52 @@ def make_callable(
 # ---------------------------------------------------------------------------
 
 
+_LLM_LOOP: asyncio.AbstractEventLoop | None = None
+_LLM_LOOP_LOCK = threading.Lock()
+
+
+def _persistent_loop() -> asyncio.AbstractEventLoop:
+    """Return the shared background event loop, starting it on first use.
+
+    A single long-lived loop (daemon thread) hosts every actants call
+    from the sync analyze path. This matters because a shared
+    `actants.LLM` keeps an httpx connection pool whose connections are
+    bound to the loop they were created on — running each call on a
+    fresh `asyncio.run()` loop leaves the second call holding pooled
+    connections from a closed loop ("RuntimeError: Event loop is
+    closed"). One persistent loop keeps the pool valid for the life of
+    the process.
+    """
+    global _LLM_LOOP
+    with _LLM_LOOP_LOCK:
+        if _LLM_LOOP is None or _LLM_LOOP.is_closed():
+            loop = asyncio.new_event_loop()
+            thread = threading.Thread(
+                target=loop.run_forever, name="meetmind-llm-loop", daemon=True
+            )
+            thread.start()
+            _LLM_LOOP = loop
+        return _LLM_LOOP
+
+
 def _run(coro: Any) -> Any:
-    """Run an async call from sync code, regardless of event-loop state."""
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    return _await_in_thread(coro)
+    """Run an async call from sync code, regardless of event-loop state.
+
+    Always executes on the shared persistent loop (see
+    `_persistent_loop`), so it is safe both from plain sync code and
+    from inside another running event loop.
+    """
+    return asyncio.run_coroutine_threadsafe(coro, _persistent_loop()).result()
 
 
 def _await_in_thread(coro: Any) -> Any:
-    """Run coro on a fresh event loop in a worker thread.
+    """Run coro on the shared background loop from any thread.
 
     `actants.LLM.extract` is async; the analyze package is sync. When
     we're inside a running loop already, we cannot nest `asyncio.run`,
-    so we hop to a worker thread with a brand-new loop. Each call gets
-    its own loop so no state leaks between calls.
+    so we hop to the persistent worker-thread loop instead.
     """
-    import concurrent.futures
-
-    def _runner() -> Any:
-        loop = asyncio.new_event_loop()
-        try:
-            asyncio.set_event_loop(loop)
-            return loop.run_until_complete(coro)
-        finally:
-            loop.close()
-            asyncio.set_event_loop(None)
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-        return ex.submit(_runner).result()
+    return asyncio.run_coroutine_threadsafe(coro, _persistent_loop()).result()
 
 
 def _await_in_loop(coro: Any, loop: asyncio.AbstractEventLoop | None = None) -> Any:

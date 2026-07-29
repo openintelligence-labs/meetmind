@@ -22,16 +22,24 @@ MeetMind is a local-first meeting assistant for capturing, transcribing, summari
 
 ## Installation
 
-Install the package from PyPI:
+Install from the latest GitHub release (MeetMind is not on PyPI yet):
 
 ```bash
-pip install meetmind
+pip install https://github.com/openintelligence-labs/meetmind/releases/latest/download/meetmind-1.0.0-py3-none-any.whl
+```
+
+Or install from source:
+
+```bash
+git clone https://github.com/openintelligence-labs/meetmind.git
+cd meetmind
+pip install .
 ```
 
 For the recommended local setup, install the API, dashboard, encrypted storage, search, and audio extras:
 
 ```bash
-pip install 'meetmind[api,encrypted,storage,audio]'
+pip install 'meetmind[api,encrypted,storage,audio] @ git+https://github.com/openintelligence-labs/meetmind.git'
 ```
 
 Available extras:
@@ -51,6 +59,20 @@ meetmind selftest
 ```
 
 If the `encrypted` extra is not installed, MeetMind uses plain SQLite and reports that mode in `meetmind status`.
+
+### Native capture sidecars (macOS)
+
+Live capture and on-device transcription use small Swift sidecar binaries (capture, Parakeet STT, diarization). Get them one of two ways:
+
+- Download `meetmind-sidecars-macos-arm64.tar.gz` from the GitHub release, unpack it, and place the binaries on your `PATH` (or point `MEETMIND_CAPTURE_SIDECAR` / `MEETMIND_STT_SIDECAR` at them).
+- Build from source (requires Xcode command line tools, macOS 14.4+):
+
+```bash
+cd sidecars/macos
+swift build -c release
+```
+
+A source checkout is auto-discovered at `sidecars/macos/.build/release/`. `meetmind selftest` reports whether the sidecars are found. Without them, `meetmind record --mock` still exercises the full pipeline with synthetic audio. The STT sidecar downloads the Parakeet model (~690 MB, one time) on first use.
 
 ## LLM configuration
 

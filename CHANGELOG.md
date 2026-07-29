@@ -3,11 +3,23 @@
 All notable changes to MeetMind. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versioning is [SemVer](https://semver.org/).
 
-The first public release will be **v1.0.0**. Until then everything
-sits under `[Unreleased]` — the entries below describe the feature
-surface that v1.0 will ship with, not a historical dev log.
-
 ## [Unreleased]
+
+Nothing yet.
+
+## [1.0.0] — 2026-07-29
+
+First public release. Everything below is the feature surface v1.0
+ships with, verified end-to-end on macOS (Apple Silicon): native
+sidecars build from source, `meetmind selftest` is green, and a real
+audio file runs the full capture-IPC → Parakeet STT → Ollama
+summarize pipeline.
+
+### Fixed
+- `meetmind summarize` no longer crashes with `RuntimeError: Event
+  loop is closed` on the second extraction pass: the shared
+  `actants.LLM` httpx pool is now hosted on one persistent background
+  event loop instead of a fresh `asyncio.run()` loop per call.
 
 ### Capture & transcription
 - macOS Core Audio Tap loopback capture (PID translation, real subtap
