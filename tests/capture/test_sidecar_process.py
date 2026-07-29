@@ -16,6 +16,11 @@ from meetmind.ipc import IPCError, SidecarProcess, StreamId
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "mock_sidecar.py"
 
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="mock sidecar launcher is a POSIX shell script; Windows sidecar is post-1.0 (ROADMAP)",
+)
+
 
 def _binary() -> Path:
     """Return a small wrapper script that runs the mock with this Python."""

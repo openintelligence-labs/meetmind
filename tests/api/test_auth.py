@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 
 import httpx
 import pytest
@@ -24,6 +25,10 @@ def test_generate_token_is_unique_and_long():
     assert len(a) >= 40  # secrets.token_urlsafe(32) → ~43 chars
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX file-mode semantics; Windows token ACL hardening tracked in issues",
+)
 def test_write_token_uses_0600(tmp_path):
     target = tmp_path / "token"
     write_token("abc123", target)

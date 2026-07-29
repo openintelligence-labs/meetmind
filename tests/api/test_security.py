@@ -9,8 +9,10 @@ Three layers:
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from meetmind.api.auth import generate_token, write_token
@@ -42,6 +44,10 @@ def test_cors_regex_unconstrained_when_no_port() -> None:
     assert not rx.match("https://evil.example")
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX file-mode semantics; Windows token ACL hardening tracked in issues",
+)
 def test_token_file_mode_is_0600(tmp_path: Path) -> None:
     target = tmp_path / "token"
     write_token("a-test-token", path=target)
@@ -53,6 +59,10 @@ def test_token_file_mode_is_0600(tmp_path: Path) -> None:
     assert target.read_text("ascii") == "a-test-token"
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX file-mode semantics; Windows token ACL hardening tracked in issues",
+)
 def test_token_file_overwrite_preserves_0600(tmp_path: Path) -> None:
     """O_TRUNC reuse must not widen perms."""
     target = tmp_path / "token2"
@@ -96,6 +106,7 @@ def test_handshake_rejects_non_loopback() -> None:
 def test_token_path_lives_in_meetmind_home(monkeypatch, tmp_path) -> None:
     """token_path() resolves to ~/.meetmind/token — verify with a fake HOME."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Path.home() on Windows
     # Must use Path.home() resolution, not cached state.
     import importlib
 
@@ -154,6 +165,10 @@ def test_handshake_token_loopback_only() -> None:
     assert r.status_code == 200
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX file-mode semantics; Windows token ACL hardening tracked in issues",
+)
 def test_token_path_default_excludes_world_when_dir_created(tmp_path, monkeypatch) -> None:
     """Sanity: a fresh `write_token` to a path under a new dir creates
     the parent and sets the file (not the dir) to 0600."""

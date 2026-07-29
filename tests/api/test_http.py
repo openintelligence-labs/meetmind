@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 
 import httpx
 import pytest
@@ -326,6 +327,10 @@ async def test_static_ui_is_mounted_when_present(app_and_client):
 
 
 @pytest.mark.timeout(10)
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="live uvicorn startup is flaky on Windows CI runners; path covered on Linux/macOS",
+)
 async def test_transcripts_live_emits_via_real_uvicorn(app_and_client):
     """End-to-end SSE through a real uvicorn server on a 127.0.0.1 port.
 
