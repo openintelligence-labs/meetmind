@@ -9,14 +9,15 @@ Three layers:
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 from meetmind.api.auth import generate_token, write_token
 from meetmind.api.http import _cors_regex, create_app
+from tests.api.test_auth import assert_owner_only_windows_acl
 
 
 def test_cors_regex_locked_to_bound_port() -> None:
@@ -44,34 +45,43 @@ def test_cors_regex_unconstrained_when_no_port() -> None:
     assert not rx.match("https://evil.example")
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="POSIX file-mode semantics; Windows token ACL hardening tracked in issues",
-)
 def test_token_file_mode_is_0600(tmp_path: Path) -> None:
     target = tmp_path / "token"
     write_token("a-test-token", path=target)
-    st = target.stat()
-    # Owner-only read/write. Group/other bits must be zero.
-    mode = st.st_mode & 0o777
-    assert mode == 0o600, oct(mode)
+    if sys.platform == "win32":
+        # Mode bits don't gate access on Windows; assert the icacls
+        # DACL instead: current user only, no Everyone/BUILTIN\Users.
+        assert_owner_only_windows_acl(target)
+    else:
+        st = target.stat()
+        # Owner-only read/write. Group/other bits must be zero.
+        mode = st.st_mode & 0o777
+        assert mode == 0o600, oct(mode)
     # And: must actually be readable by the owner.
     assert target.read_text("ascii") == "a-test-token"
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="POSIX file-mode semantics; Windows token ACL hardening tracked in issues",
-)
 def test_token_file_overwrite_preserves_0600(tmp_path: Path) -> None:
     """O_TRUNC reuse must not widen perms."""
     target = tmp_path / "token2"
     write_token("first", path=target)
     # Touch with broader perms to confirm we narrow back.
-    target.chmod(0o644)
-    write_token("second", path=target)
-    mode = target.stat().st_mode & 0o777
-    assert mode == 0o600, oct(mode)
+    if sys.platform == "win32":
+        # chmod can't widen a Windows DACL — grant Everyone explicitly,
+        # then confirm the rewrite strips it back to owner-only.
+        subprocess.run(
+            ["icacls", str(target), "/grant", "Everyone:F"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        write_token("second", path=target)
+        assert_owner_only_windows_acl(target)
+    else:
+        target.chmod(0o644)
+        write_token("second", path=target)
+        mode = target.stat().st_mode & 0o777
+        assert mode == 0o600, oct(mode)
 
 
 def test_unauth_request_is_rejected() -> None:
@@ -165,14 +175,11 @@ def test_handshake_token_loopback_only() -> None:
     assert r.status_code == 200
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="POSIX file-mode semantics; Windows token ACL hardening tracked in issues",
-)
 def test_token_path_default_excludes_world_when_dir_created(tmp_path, monkeypatch) -> None:
     """Sanity: a fresh `write_token` to a path under a new dir creates
-    the parent and sets the file (not the dir) to 0600."""
+    the parent and restricts the file (not the dir) to the owner."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Path.home() on Windows
     import importlib
 
     from meetmind.api import auth as auth_mod  # noqa: PLC0415
@@ -181,7 +188,10 @@ def test_token_path_default_excludes_world_when_dir_created(tmp_path, monkeypatc
     tok = generate_token()
     p = auth_mod.write_token(tok)
     assert p.exists()
-    assert (p.stat().st_mode & 0o777) == 0o600
+    if sys.platform == "win32":
+        assert_owner_only_windows_acl(p)
+    else:
+        assert (p.stat().st_mode & 0o777) == 0o600
     # Cleanup.
     monkeypatch.undo()
     importlib.reload(auth_mod)

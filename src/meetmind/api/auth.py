@@ -13,8 +13,11 @@ matches the precedent set by Ollama, LM Studio, and Linear desktop.
 
 from __future__ import annotations
 
+import getpass
 import os
 import secrets
+import subprocess
+import sys
 from pathlib import Path
 
 import httpx
@@ -23,6 +26,37 @@ from fastapi import HTTPException, Request
 
 def token_path() -> Path:
     return Path.home() / ".meetmind" / "token"
+
+
+def _restrict_windows_acl(target: Path) -> None:
+    """Restrict `target` to the current user via an owner-only DACL.
+
+    ``os.chmod(0o600)`` is a no-op for access control on Windows (files
+    report 0666 regardless), so we shell out to ``icacls``:
+
+      * ``/inheritance:r`` strips every inherited ACE (Everyone,
+        BUILTIN\\Users, ...), and
+      * ``/grant:r <user>:F`` replaces the grant list with a single
+        full-control ACE for the current user.
+
+    On failure we delete the token file and raise — a world-readable
+    bearer token is strictly worse than no token at all.
+    """
+    user = getpass.getuser()
+    try:
+        subprocess.run(  # noqa: S603 — fixed argv, path is ours, no shell
+            ["icacls", str(target), "/inheritance:r", "/grant:r", f"{user}:F"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "stderr", "") or str(exc)
+        target.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"failed to restrict token file ACL on Windows ({target}): "
+            f"{detail.strip()} — refusing to leave the token world-readable"
+        ) from exc
 
 
 def generate_token() -> str:
@@ -40,6 +74,10 @@ def write_token(token: str, path: Path | None = None) -> Path:
         ONLY when creating. If the file already existed (e.g. user ran
         an older build), ``O_TRUNC`` truncates but leaves perms alone.
         We follow up with an explicit ``chmod(0o600)`` and assert it.
+
+    On Windows the mode bits are meaningless for access control, so we
+    additionally apply an owner-only DACL via ``icacls`` (see
+    :func:`_restrict_windows_acl`).
     """
     target = path or token_path()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -52,6 +90,10 @@ def write_token(token: str, path: Path | None = None) -> Path:
     # consistent with the contract). On POSIX this is the line that
     # actually closes the pre-existing-loose-perms gap.
     os.chmod(str(target), 0o600)
+    if sys.platform == "win32":
+        # chmod does nothing for Windows access control; apply an
+        # owner-only DACL so the token matches the POSIX 0600 posture.
+        _restrict_windows_acl(target)
     return target
 
 
