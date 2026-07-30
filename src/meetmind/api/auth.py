@@ -32,11 +32,14 @@ def _restrict_windows_acl(target: Path) -> None:
     """Restrict `target` to the current user via an owner-only DACL.
 
     ``os.chmod(0o600)`` is a no-op for access control on Windows (files
-    report 0666 regardless), so we shell out to ``icacls``:
+    report 0666 regardless), so we shell out to ``icacls`` twice:
 
-      * ``/inheritance:r`` strips every inherited ACE (Everyone,
-        BUILTIN\\Users, ...), and
-      * ``/grant:r <user>:F`` replaces the grant list with a single
+      * ``/reset`` first replaces the whole ACL with the inherited
+        defaults — this clears any *explicit* ACE a previous writer may
+        have added (e.g. an ``Everyone`` grant), which neither
+        ``/inheritance:r`` nor ``/grant:r`` would remove on their own;
+      * ``/inheritance:r`` then strips every inherited ACE (Everyone,
+        BUILTIN\\Users, ...), and ``/grant:r <user>:F`` leaves a single
         full-control ACE for the current user.
 
     On failure we delete the token file and raise — a world-readable
@@ -44,12 +47,16 @@ def _restrict_windows_acl(target: Path) -> None:
     """
     user = getpass.getuser()
     try:
-        subprocess.run(  # noqa: S603 — fixed argv, path is ours, no shell
+        for argv in (
+            ["icacls", str(target), "/reset"],
             ["icacls", str(target), "/inheritance:r", "/grant:r", f"{user}:F"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        ):
+            subprocess.run(  # noqa: S603 — fixed argv, path is ours, no shell
+                argv,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
     except (OSError, subprocess.CalledProcessError) as exc:
         detail = getattr(exc, "stderr", "") or str(exc)
         target.unlink(missing_ok=True)
