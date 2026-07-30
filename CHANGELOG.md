@@ -7,6 +7,15 @@ versioning is [SemVer](https://semver.org/).
 
 Nothing yet.
 
+## [1.0.1] — 2026-07-29
+
+### Changed
+- Published to PyPI as **`meetmind-ai`** (the name `meetmind` on PyPI belongs to an
+  unrelated package). Install with `pip install meetmind-ai`; the CLI command and import
+  name remain `meetmind`.
+- CI: Windows-only POSIX test fixtures are now skipped with tracked reasons (#3); smoke
+  harness updated to the v1.0 output format.
+
 ## [1.0.0] — 2026-07-29
 
 First public release. Everything below is the feature surface v1.0

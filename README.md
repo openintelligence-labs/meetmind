@@ -25,7 +25,7 @@ MeetMind is a local-first meeting assistant for capturing, transcribing, summari
 Install from the latest GitHub release (MeetMind is not on PyPI yet):
 
 ```bash
-pip install https://github.com/openintelligence-labs/meetmind/releases/latest/download/meetmind-1.0.0-py3-none-any.whl
+pip install meetmind-ai
 ```
 
 Or install from source:
@@ -39,7 +39,7 @@ pip install .
 For the recommended local setup, install the API, dashboard, encrypted storage, search, and audio extras:
 
 ```bash
-pip install 'meetmind[api,encrypted,storage,audio] @ git+https://github.com/openintelligence-labs/meetmind.git'
+pip install 'meetmind-ai[api,encrypted,storage,audio]'
 ```
 
 Available extras:
@@ -329,7 +329,7 @@ meetmind selftest --json
 Install development dependencies:
 
 ```bash
-pip install 'meetmind[dev]'
+pip install -e '.[dev]'
 ```
 
 Run checks:
