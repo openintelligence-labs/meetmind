@@ -7,6 +7,18 @@ versioning is [SemVer](https://semver.org/).
 
 Nothing yet.
 
+## [1.0.2] — 2026-07-30
+
+### Security
+- Windows: `~/.meetmind/token` is now restricted to the current user via an
+  owner-only `icacls` DACL (`/reset`, then `/inheritance:r /grant:r <user>:F`) —
+  `os.chmod(0o600)` is a no-op for access control on Windows. If the ACL cannot
+  be applied, the token file is deleted and a clear error is raised instead of
+  leaving a world-readable bearer token on disk (#3).
+- Token-file ACL tests are re-enabled on win32 with `icacls`-based assertions
+  (owner-only; no `Everyone`, no `BUILTIN\Users`), including the
+  narrow-back-after-widening case.
+
 ## [1.0.1] — 2026-07-29
 
 ### Changed

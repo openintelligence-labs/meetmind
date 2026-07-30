@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "meetmind-ai"
-version = "1.0.1"
+version = "1.0.2"
 description = "Local-first meeting assistant. Audio + transcripts stay on your device; bring your own LLM (Ollama, OpenAI, Anthropic, …)."
 readme = "README.md"
 license = { text = "MIT" }
