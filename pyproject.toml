@@ -56,7 +56,8 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-cov>=5.0",
     "pytest-timeout>=2.3",
-    "ruff>=0.5",
+    # pin minor: ruff 0.16 began format-checking Markdown code blocks; unpinned CI broke on release day
+    "ruff>=0.16,<0.17",
     "import-linter>=2.0",
     "fastapi>=0.110",
     "uvicorn>=0.30",

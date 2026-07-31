@@ -27,9 +27,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e '.[dev,storage,api]'
       - name: Lint (ruff)
-        run: ruff check src tests
+        run: ruff check src tests scripts
       - name: Format check (ruff)
-        run: ruff format --check src tests
+        run: ruff format --check src tests scripts
       - name: Module boundaries (import-linter)
         run: lint-imports --config pyproject.toml
       - name: Tests

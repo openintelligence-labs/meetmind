@@ -10,6 +10,7 @@ Reads /proc/self/status (Linux) or `ps` (macOS/BSD) and prints a JSON
 record. Doesn't fail the build above the budget — it's tracked as a
 trend, alerted on regressions in CI.
 """
+
 from __future__ import annotations
 
 import json
@@ -44,13 +45,17 @@ def main() -> None:
     rss = _rss_bytes()
     rss_mb = round(rss / (1024 * 1024), 1)
     budget = 200 if sys.platform != "win32" else 300
-    print(json.dumps({
-        "metric": "idle_rss_mb",
-        "value": rss_mb,
-        "budget_mb": budget,
-        "platform": platform.platform(),
-        "within_budget": rss_mb < budget,
-    }))
+    print(
+        json.dumps(
+            {
+                "metric": "idle_rss_mb",
+                "value": rss_mb,
+                "budget_mb": budget,
+                "platform": platform.platform(),
+                "within_budget": rss_mb < budget,
+            }
+        )
+    )
 
 
 if __name__ == "__main__":

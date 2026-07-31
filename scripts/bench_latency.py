@@ -17,6 +17,7 @@ this script is the harness for when those land.
 Output: one JSON object per measurement to stdout. CI collects these
 into a tracked perf table over time.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -83,9 +84,9 @@ async def _bench_eot_to_action() -> dict:
 
 def _bench_search_query() -> dict:
     """Measure HybridIndex.search() against a small in-memory corpus."""
-    from meetmind.memory.vector import HybridIndex, IndexedSegment, hash_embedder
-
     import tempfile
+
+    from meetmind.memory.vector import HybridIndex, IndexedSegment, hash_embedder
 
     with tempfile.TemporaryDirectory() as td:
         idx = HybridIndex.open(Path(td) / "vec", vector_dim=64, embedder=hash_embedder(64))
