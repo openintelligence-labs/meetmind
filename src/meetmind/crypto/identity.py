@@ -1,12 +1,7 @@
-"""Per-install Ed25519 identity key.
+"""Per-install Ed25519 identity key for signing transcript bundles.
 
-The user's signing key for legal-mode transcript bundles. Generated on
-first use and stored in the OS keychain via the `keyring` library on
-production paths; tests use an in-memory KeyStore.
-
-Public key is derived deterministically from the private key, so we
-don't need to also persist it. We do persist a fingerprint (sha256 over
-the public-key bytes, hex) for "show me my key" UX.
+Generated on first use and stored in the OS keychain via `keyring`. Only the
+private key is persisted; the public key is derived from it.
 """
 
 from __future__ import annotations
@@ -38,9 +33,9 @@ class KeyStore(Protocol):
 
 def _system_keystore() -> KeyStore:
     """Return the OS keychain via the `keyring` library."""
-    import keyring  # local import — only needed in production paths
+    import keyring
 
-    return keyring  # keyring module satisfies the Protocol shape
+    return keyring  # the module satisfies the KeyStore Protocol shape
 
 
 @dataclass
@@ -111,11 +106,8 @@ def forget_identity(store: KeyStore | None = None) -> None:
     keystore.delete_password(KEYCHAIN_SERVICE, KEYCHAIN_KEY)
 
 
-# In-memory keystore for tests + ephemeral CI use. Not for production.
-
-
 class InMemoryKeyStore:
-    """Dict-backed `KeyStore`. Useful in tests and `assist` ephemeral sessions."""
+    """Dict-backed `KeyStore` for tests and ephemeral sessions."""
 
     def __init__(self) -> None:
         self._store: dict[tuple[str, str], str] = {}

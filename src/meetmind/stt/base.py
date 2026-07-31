@@ -1,17 +1,9 @@
-"""STT backend protocol.
+"""STT backend protocol, covering two operating modes.
 
-Two operating modes:
-
-* **Streaming** — the live captioning tier. Backend consumes 16 kHz
-  mono float32 frames as they're produced by the capture pipeline and
-  emits `Partial`s (incremental hypothesis) and `Final`s (committed,
-  punctuated text spans). Used for live captions, coaching, assist.
-* **Batch** — the polish tier. Backend consumes a complete utterance
-  (or a whole meeting) and returns a single high-quality transcript.
-  Used for the post-meeting Whisper / Canary polish pass.
-
-Implementations live alongside this file — `mock.py` for tests, and
-`parakeet_v3.py` (S1.6) for the production FluidAudio path.
+Streaming backends consume 16 kHz mono float32 frames from the capture
+pipeline and emit `Partial`s and `Final`s for live captioning. Batch backends
+consume a complete utterance or meeting and return one high-quality transcript
+for the post-meeting polish pass.
 """
 
 from __future__ import annotations
@@ -27,9 +19,8 @@ import numpy as np
 class Partial:
     """An incremental, possibly-revisable hypothesis from a streaming STT.
 
-    `text` is the full hypothesis since the last Final, not just the
-    delta — this matches Whisper / Parakeet streaming conventions and
-    makes overlay rendering trivial (just replace last line).
+    `text` is the full hypothesis since the last Final, not the delta, so
+    an overlay renders by replacing its last line.
     """
 
     text: str

@@ -1,23 +1,13 @@
-"""Calendar-prior Bayesian fusion.
+"""Calendar-attendee priors for the voiceprint matcher.
 
-When the calendar tells us a meeting has N specific attendees, the
-matcher can do better than uniform-prior cosine ranking. We bias
-posterior(speaker | embedding) toward the calendar set while reserving
-some mass for ``UNKNOWN`` (someone joined unexpectedly).
+Builds the ``priors`` dict ``Matcher.match()`` accepts, biasing toward known
+calendar attendees while reserving mass for someone who joined unexpectedly:
 
-This module is purely functional: it builds a ``priors`` dict that
-``Matcher.match()`` accepts. No state, no I/O, no model.
+    prior(c)       = (1 - α - residual) / N  for c in calendar_attendees
+    prior(other)   = residual / |others|     for enrolled non-attendees
+    prior(UNKNOWN) = α
 
-The fusion is the documented log-linear form:
-
-    posterior(c) ∝ exp(cos(emb, μ_c) / τ) × prior(c)
-    prior(c)     = (1 - α) / N      for c in calendar_attendees
-    prior(other) = (residual / |others|) for non-attendees with centroids
-    prior(UNKNOWN) = α               (synthetic candidate at accept_threshold)
-
-Decide identity only when ``posterior(best) ≥ threshold AND
-cos(best) ≥ accept_threshold``. The ``Matcher`` already enforces both
-gates; this module just shapes the priors.
+Purely functional; the matcher enforces the posterior and cosine gates.
 """
 
 from __future__ import annotations
@@ -34,11 +24,9 @@ class CalendarPrior:
 
     unknown_alpha: float = 0.10  # mass reserved for "not in the calendar"
     non_attendee_residual: float = 0.0  # mass shared across non-attendees
-    """0.0 means non-attendee speakers get zero weight in the prior; the
-    only way they can win is if posterior ≥ threshold without a prior
-    boost (i.e. their cosine is overwhelmingly higher than the
-    attendees'). Set to e.g. 0.05 to allow a fall-through when calendar
-    metadata is wrong."""
+    """At 0.0 a non-attendee can only win on an overwhelmingly higher cosine.
+    Raise it (e.g. 0.05) to leave a fall-through path for wrong calendar
+    metadata."""
 
 
 def bayesian_priors(
@@ -74,11 +62,8 @@ def bayesian_priors(
         for sid in out_of_calendar:
             priors[sid] = per_other
 
-    # Anyone in attendees who isn't enrolled yet contributes to UNKNOWN
-    # mass implicitly — Matcher.match() treats UNKNOWN as a synthetic
-    # candidate at config.unknown_prior. This module doesn't need to
-    # touch UNKNOWN explicitly.
-
+    # Unenrolled attendees need no entry: Matcher.match() already carries
+    # UNKNOWN as a synthetic candidate at config.unknown_prior.
     return priors
 
 
@@ -86,11 +71,10 @@ def attendee_overlap(
     speakers: Iterable[Speaker],
     calendar_attendee_ids: Iterable[str] | None,
 ) -> tuple[set[str], set[str]]:
-    """Diagnostic helper: ``(known_attendees, unknown_attendees)``.
+    """Split calendar IDs into ``(enrolled, not_enrolled)``.
 
-    ``known_attendees`` are calendar IDs we already have voiceprints for;
-    ``unknown_attendees`` are calendar IDs without enrollment — those
-    show up as ``cluster_id="unknown"`` until the user attributes them.
+    Unenrolled attendees show up as ``cluster_id="unknown"`` until the user
+    attributes them.
     """
     attendees = set(calendar_attendee_ids or [])
     known_ids = {s.id for s in speakers}

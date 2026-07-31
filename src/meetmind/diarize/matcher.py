@@ -1,24 +1,9 @@
-"""Voiceprint matcher.
+"""Voiceprint matching by cosine similarity on L2-normalized EMA centroids.
 
-Cosine similarity on **L2-normalized EMA centroids**. This is equivalent
-to a properly tuned PLDA when embeddings are large-margin AAM-softmax
-(which ReDimNet-B3, ECAPA-TDNN, and
-ResNet293-LM all are) — and cosine has no domain-mismatch retraining,
-so it's the right default for a consumer product.
-
-Contract:
-  • ``match(embedding, speakers)`` returns (speaker_id, score) for the
-    best match if posterior > threshold, else None.
-  • ``update(speaker, embedding, ...)`` does an EMA update on the
-    centroid and a ring-buffer push (last 32 embeddings retained for
-    re-centroiding after deletes).
-
-Thresholds default to FAR ≈ 0.1% on ReDimNet-B3 — i.e. accept if cos ≥
-0.58, queue for active-learning if 0.45–0.58, reject below 0.45. These
-are tunable per-embedder; ECAPA-TDNN typically sits at τ ≈ 0.55 for
-the same FAR.
-
-This module is pure NumPy. The embedder lives in ``voiceprint.py``.
+Cosine is equivalent to a tuned PLDA for large-margin AAM-softmax embeddings
+(ReDimNet-B3, ECAPA-TDNN, ResNet293-LM) without needing domain-mismatch
+retraining. Default thresholds target FAR ~0.1% on ReDimNet-B3 and are
+tunable per embedder. The embedder itself lives in ``voiceprint.py``.
 """
 
 from __future__ import annotations
@@ -101,19 +86,14 @@ def _decode_ring(speaker: Speaker) -> list[np.ndarray]:
 
 @dataclass
 class Matcher:
-    """Cosine matcher + EMA centroid updater.
+    """Cosine matcher and EMA centroid updater.
 
-    Stateless aside from the `MatcherConfig`; centroid + ring storage
-    lives on `Speaker` rows in the SQLCipher store. All updates return
-    a fresh `Speaker` value rather than mutating in-place so the caller
-    decides when to upsert.
+    Stateless aside from its `MatcherConfig`; centroid and ring storage live
+    on `Speaker` rows. Updates return a fresh `Speaker` rather than mutating
+    in place, so the caller decides when to upsert.
     """
 
     config: MatcherConfig = field(default_factory=MatcherConfig)
-
-    # ---------------------------------------------------------------------
-    # Matching
-    # ---------------------------------------------------------------------
 
     def match(
         self,
@@ -124,9 +104,8 @@ class Matcher:
     ) -> MatchDecision:
         """Find the best speaker for ``embedding`` from ``speakers``.
 
-        ``priors`` is an optional ``{speaker_id: weight}`` map (e.g.
-        from `calendar_prior.bayesian_priors`). Missing speakers
-        receive a uniform prior over the unprovided set.
+        ``priors`` is an optional ``{speaker_id: weight}`` map. Speakers
+        missing from it receive a uniform prior over the unprovided set.
         """
         emb_unit = _to_unit(embedding)
         candidates: list[tuple[str, float, float]] = []  # (id, cos, prior)
@@ -144,8 +123,8 @@ class Matcher:
             cos = float(np.dot(emb_unit, _to_unit(centroid)))
             candidates.append((sp.id, cos, float(priors.get(sp.id, 0.0))))
 
-        # Posterior via softmax on (cos / τ) weighted by priors. UNKNOWN
-        # gets a synthetic candidate at cos=accept_threshold, prior=alpha.
+        # Softmax on (cos / τ) weighted by priors, with a synthetic UNKNOWN
+        # candidate pinned at cos=accept_threshold so weak matches lose to it.
         tau = max(self.config.softmax_temperature, 1e-6)
         unknown_logit = self.config.accept_threshold / tau + math.log(
             max(self.config.unknown_prior, 1e-12)
@@ -180,10 +159,6 @@ class Matcher:
             band=band,
         )
 
-    # ---------------------------------------------------------------------
-    # EMA update
-    # ---------------------------------------------------------------------
-
     def should_update(
         self,
         cos: float,
@@ -217,7 +192,6 @@ class Matcher:
         ring.append(emb_unit.copy())
         ring = ring[-self.config.ring_capacity :]
 
-        # Speaker is a Pydantic v2 model — use model_copy.
         return speaker.model_copy(
             update={
                 "voiceprint_centroid": _encode_centroid(new_centroid),
@@ -225,16 +199,11 @@ class Matcher:
             }
         )
 
-    # ---------------------------------------------------------------------
-    # Re-centroid (after deletes / migrations)
-    # ---------------------------------------------------------------------
-
     def recentroid(self, speaker: Speaker) -> Speaker:
-        """Recompute centroid from the ring buffer.
+        """Recompute the centroid from the ring buffer.
 
-        Useful after a privacy delete where the centroid may have
-        contained leaked information from an erased speaker, or
-        after migrating to a new embedder.
+        Used after a privacy delete, where the centroid may still carry
+        information from an erased speaker, or after an embedder migration.
         """
         ring = _decode_ring(speaker)
         if not ring:

@@ -1,25 +1,13 @@
-"""Live coaching loop.
+"""Live coaching loop, off by default and enabled by ``meetmind record --coach``.
 
-Subscribes to the local SSE bus, holds a rolling window of recent
-transcript text, and every ``tick_seconds`` asks the configured LLM
-for one short coaching tip — emitting it back onto the bus as a
-``CoachTipEvent`` so the Tauri overlay can render it.
+Holds a rolling window of recent transcript text and periodically asks the
+configured LLM (``MEETMIND_COACH_MODEL``, else ``MEETMIND_LLM_MODEL``) for one
+short tip, published back onto the bus as a ``CoachTipEvent``. Ticks are
+dropped rather than queued so a slow model never blocks the transcript path.
 
-**Off by default.** Enabled via ``meetmind record --coach``. Never
-blocks the transcript path: the LLM call runs in its own task and we
-drop ticks rather than queue them up if the model is slow.
-
-**BYO-LLM aware.** Honors ``MEETMIND_COACH_MODEL`` (or falls back to
-``MEETMIND_LLM_MODEL``, then to whatever the actants default model is).
-The architecture spec says Qwen3-4B is ideal because it's small and fast,
-but the coach works against any actants-supported provider — local
-Ollama for users with the hardware, hosted (OpenAI/Anthropic/Groq) for
-users without it.
-
-Module boundary: lives in ``meetmind.api`` because it both subscribes
-to and publishes back onto the ``EventBus``. ``meetmind.analyze`` is
-forbidden from touching ``meetmind.api`` (import-linter contract), so
-the coach can't live there.
+Lives in ``meetmind.api`` rather than ``meetmind.analyze`` because it both
+subscribes to and publishes onto the ``EventBus``, which the import-linter
+contract forbids ``analyze`` from touching.
 """
 
 from __future__ import annotations
@@ -62,9 +50,9 @@ JSON only, no preamble:"""
 class CoachConfig:
     window_seconds: float = 60.0
     tick_seconds: float = 15.0
-    min_text_chars: int = 80  # don't bother the LLM until we have signal
-    min_confidence: float = 0.3  # drop tips below this
-    model: str | None = None  # MEETMIND_COACH_MODEL override
+    min_text_chars: int = 80
+    min_confidence: float = 0.3
+    model: str | None = None
     prompt_template: str = _DEFAULT_PROMPT
 
 
@@ -85,10 +73,6 @@ class CoachLoop:
     _spans: deque[_Span] = field(default_factory=deque)
     _last_tip_window: tuple[int, int] | None = None
 
-    # ---------------------------------------------------------------------
-    # Public API
-    # ---------------------------------------------------------------------
-
     async def run(self, *, stop: asyncio.Event | None = None) -> None:
         """Run forever. Cancellable via ``stop`` event or task cancel."""
         stop = stop or asyncio.Event()
@@ -107,21 +91,19 @@ class CoachLoop:
                     await asyncio.gather(consumer, ticker, return_exceptions=True)
 
     def ingest(self, event: Event) -> None:
-        """Synchronous span ingestion (also useful in tests)."""
+        """Add an event's text to the rolling window, if it carries any."""
         span = _event_to_span(event)
         if span is not None:
             self._spans.append(span)
             self._evict()
 
     async def emit_tip_now(self) -> CoachTipEvent | None:
-        """Force a single tip emission against the current window. Returns it
-        if one was published, ``None`` if there wasn't enough signal or the
-        LLM declined."""
-        return await self._maybe_emit()
+        """Emit a tip for the current window now.
 
-    # ---------------------------------------------------------------------
-    # Internals
-    # ---------------------------------------------------------------------
+        Returns the published event, or None when the window lacks signal or
+        the LLM declines.
+        """
+        return await self._maybe_emit()
 
     async def _consume(self, queue: asyncio.Queue[Event], stop: asyncio.Event) -> None:
         while not stop.is_set():
@@ -220,17 +202,11 @@ class CoachLoop:
         )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _event_to_span(event: Event) -> _Span | None:
-    """Pluck displayable text out of FinalEvent / SpeakerEvent. Drop the rest.
+    """Pluck committed text out of FinalEvent / SpeakerEvent, dropping the rest.
 
-    Coach explicitly ignores `partial` events — those are revisable and
-    feeding them to the LLM would cause the tip to flip-flop on every
-    rev. Only `final` and `speaker` events carry committed text.
+    `partial` events are ignored on purpose: they are revisable, so feeding
+    them to the LLM would make the tip flip-flop on every revision.
     """
     if isinstance(event, SpeakerEvent):
         return _Span(text=event.text, start_ms=event.start_ms, end_ms=event.end_ms)
@@ -243,7 +219,7 @@ _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
 def _extract_json(body: str) -> dict[str, Any] | None:
-    """Lenient JSON extraction — small chat models sometimes wrap output in ```."""
+    """Parse JSON from a model response, tolerating surrounding prose or fences."""
     body = body.strip()
     if not body:
         return None
@@ -276,6 +252,5 @@ class _suppress_cancel:
         return exc_type is asyncio.CancelledError
 
 
-# Real-time clock indirection for tests that want to control elapsed time.
 def _now_ms() -> int:
     return int(time.monotonic() * 1000)

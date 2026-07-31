@@ -1,4 +1,4 @@
-"""Tests for MCP `resources/*` and `prompts/*` primitives (S11.2)."""
+"""Tests for MCP `resources/*` and `prompts/*` primitives."""
 
 from __future__ import annotations
 
@@ -86,11 +86,6 @@ def ctx(populated_store: Store, tmp_path: Path) -> StoreContext:
     return StoreContext(store=populated_store, index=index)
 
 
-# ---------------------------------------------------------------------------
-# resources
-# ---------------------------------------------------------------------------
-
-
 def test_list_resources_starts_with_meetings_index(populated_store: Store):
     resources = list_resources(populated_store)
     assert resources[0].uri == "meetmind://meetings"
@@ -129,8 +124,7 @@ def test_read_transcript_renders_markdown(populated_store: Store):
 
 
 def test_read_summary_handles_missing_summary(populated_store: Store):
-    # NB: `Meeting.summary` is not yet persisted in the schema (separate sprint).
-    # Until then the resource handler cleanly falls back to "no summary".
+    # `Meeting.summary` is not persisted in the schema; the handler falls back.
     content = read_resource(populated_store, "meetmind://meeting/01M1/summary")
     assert "_No summary generated yet._" in content.text
     content2 = read_resource(populated_store, "meetmind://meeting/01M2/summary")
@@ -159,11 +153,6 @@ def test_read_unknown_uri_raises_keyerror(populated_store: Store):
 def test_read_missing_meeting_raises_lookup(populated_store: Store):
     with pytest.raises(LookupError):
         read_resource(populated_store, "meetmind://meeting/01XNOPE")
-
-
-# ---------------------------------------------------------------------------
-# prompts
-# ---------------------------------------------------------------------------
 
 
 def test_list_prompts_returns_curated_set():
@@ -207,11 +196,6 @@ def test_prompt_descriptor_to_wire_shape():
     assert "meeting_id" in arg_names
     required = {a["name"] for a in wire["arguments"] if a["required"]}
     assert required == {"meeting_id"}
-
-
-# ---------------------------------------------------------------------------
-# JSON-RPC dispatch
-# ---------------------------------------------------------------------------
 
 
 async def test_jsonrpc_resources_list(ctx: StoreContext):
@@ -344,11 +328,6 @@ def test_prompt_descriptor_render_helper():
     assert p is not None
     text = p.render({"date": "2026-05-06"})
     assert "2026-05-06" in text
-
-
-# ---------------------------------------------------------------------------
-# S11.3 — person profiles + new prompts
-# ---------------------------------------------------------------------------
 
 
 def test_list_resources_includes_people_index(populated_store: Store):

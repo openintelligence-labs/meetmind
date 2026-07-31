@@ -1,13 +1,9 @@
 """Shared IPC protocol types.
 
-The capture, STT, and diarization sidecars all speak the same
-length-prefixed binary frame format defined in ``meetmind.ipc.protocol``.
-The wire format is neutral infrastructure — neither capture-specific nor
-diarize-specific — so it lives in this top-level module rather than under
-any single subsystem.
+The capture, STT, and diarization sidecars all speak the length-prefixed
+binary frame format defined in ``meetmind.ipc.protocol``.
 
-Module boundary: leaf — never imports project-internal modules. Imported by
-`capture/`, `stt/`, and `diarize/` adapters.
+Module boundary: leaf — never imports project-internal modules.
 """
 
 from meetmind.ipc.protocol import (

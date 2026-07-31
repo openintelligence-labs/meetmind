@@ -1,4 +1,4 @@
-"""Tests for the i18n scaffolding (S15.5)."""
+"""Tests for the i18n scaffolding."""
 
 from __future__ import annotations
 

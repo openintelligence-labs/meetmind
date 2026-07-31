@@ -1,8 +1,7 @@
 """Tests for the SidecarProcess watchdog hooks.
 
-We don't test the full `_run_record` watchdog loop here (that's an
-async integration concern) — we verify the two properties the watchdog
-relies on: ``returncode`` becomes non-None after the sidecar exits,
+Covers the two properties the watchdog relies on rather than the full
+`_run_record` loop: ``returncode`` becomes non-None once the sidecar exits,
 and ``stderr_tail()`` carries the last lines it emitted.
 """
 
@@ -26,7 +25,6 @@ def _make_crash_sidecar(tmp_path: Path) -> Path:
     """Write a tiny script that emits HELLO (so .start() succeeds) then exits
     with a non-zero code + some stderr."""
     # HELLO frame: type 0x01, length-prefixed JSON payload.
-    # Easiest: spawn the existing mock_sidecar fixture but tell it to crash.
     py = sys.executable
     src = tmp_path / "crasher.py"
     src.write_text(
@@ -69,7 +67,7 @@ async def test_returncode_becomes_non_none_after_crash(tmp_path: Path) -> None:
 
     # Stderr ring should contain the FATAL line.
     tail = sidecar.stderr_tail()
-    # Stderr is drained asynchronously — wait a beat if it's empty.
+    # Stderr is drained asynchronously, so it may lag briefly.
     for _ in range(20):
         if tail:
             break
@@ -89,7 +87,7 @@ async def test_returncode_none_for_unstarted_sidecar(tmp_path: Path) -> None:
 async def test_stderr_tail_caps_to_byte_limit(tmp_path: Path) -> None:
     """The tail must trim to the requested byte budget."""
     s = SidecarProcess(_make_crash_sidecar(tmp_path))
-    # Inject a fat ring directly so we don't have to spawn anything.
+    # Inject a ring directly rather than spawning a process.
     s._stderr_ring = ["A" * 100, "B" * 100, "C" * 100]  # 300+ bytes total
     tail = s.stderr_tail(max_bytes=128)
     assert len(tail) <= 128

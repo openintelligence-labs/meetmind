@@ -120,10 +120,8 @@ def _process_audio(payload: bytes, state: dict[int, dict]) -> None:
             visible = phrase[: st["chars_visible"]].rstrip()
             if visible:
                 _partial(stream_byte, visible, st["open_start_ms"], st["t_ms"] + duration_ms)
-        # Once we've revealed the whole phrase, commit it as a Final and
-        # advance to the next phrase. Without this the mock produces one
-        # frozen italic line and never finalizes (the mock capture is a
-        # constant tone, so we never see a silence transition).
+        # Commit the phrase once fully revealed. Without this the mock never
+        # finalizes, since a constant-tone capture has no silence transition.
         if st["chars_visible"] >= len(phrase):
             _emit_final_if_open(stream_byte, st)
     else:

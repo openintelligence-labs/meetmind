@@ -261,8 +261,7 @@ class SidecarProcess:
         line = json.dumps({"id": cmd_id, "op": op, "args": args or {}}) + "\n"
         proc.stdin.write(line.encode("utf-8"))
         await proc.stdin.drain()
-        # Wait specifically for the matching CONTROL_ACK (skipping any in-flight
-        # AUDIO/LOG frames). Bounded by a sensible timeout.
+        # Skip past in-flight AUDIO/LOG frames to the matching CONTROL_ACK.
         async for frame in self.frames():
             if frame.type is FrameType.CONTROL_ACK:
                 ack = frame.as_json()
@@ -301,12 +300,12 @@ class SidecarProcess:
     async def stop(self, timeout: float = 2.0) -> None:
         if self._proc is None:
             return
-        # Best-effort graceful stop. Bound everything strictly — sidecars
-        # speaking the protocol incorrectly must not deadlock teardown.
+        # Every step is timeout-bounded so a sidecar that mis-speaks the
+        # protocol cannot deadlock teardown.
         with contextlib.suppress(IPCError, TimeoutError):
             await asyncio.wait_for(self.send("stop"), timeout=timeout)
-        # Close stdin so the sidecar's `for cmd in stdin` loop exits even if
-        # `stop` ACK was lost.
+        # Closing stdin exits the sidecar's command loop even if the `stop`
+        # ACK was lost.
         if self._proc.stdin is not None and not self._proc.stdin.is_closing():
             with contextlib.suppress(Exception):
                 self._proc.stdin.close()
@@ -348,7 +347,6 @@ class SidecarProcess:
         async for line in proc.stderr:
             decoded = line.decode("utf-8", "replace").rstrip()
             log.debug("sidecar[stderr]: %s", decoded)
-            # Maintain the ring so the watchdog can include it on death.
             self._stderr_ring.append(decoded)
             if len(self._stderr_ring) > self._stderr_ring_max:
                 del self._stderr_ring[0]

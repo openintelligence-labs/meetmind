@@ -1,4 +1,4 @@
-"""Tests for the live coach loop (S12.1)."""
+"""Tests for the live coach loop."""
 
 from __future__ import annotations
 
@@ -50,11 +50,6 @@ def _speaker(text: str, start_ms: int, end_ms: int) -> SpeakerEvent:
     )
 
 
-# ---------------------------------------------------------------------------
-# Window management
-# ---------------------------------------------------------------------------
-
-
 def test_partial_events_are_ignored():
     coach = CoachLoop(llm=StubLLM())
     coach.ingest(PartialEvent(text="we should probably", start_ms=0, end_ms=500))
@@ -77,11 +72,6 @@ def test_window_evicts_spans_outside_60s():
     assert [s.text for s in coach._spans] == ["middle", "recent"]
 
 
-# ---------------------------------------------------------------------------
-# Tip emission
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_emit_tip_publishes_to_bus():
     bus = EventBus()
@@ -93,7 +83,6 @@ async def test_emit_tip_publishes_to_bus():
     received: list = []
     async with bus.subscription() as queue:
         tip = await coach.emit_tip_now()
-        # Drain anything published.
         try:
             while True:
                 received.append(queue.get_nowait())
@@ -107,7 +96,6 @@ async def test_emit_tip_publishes_to_bus():
     assert tip.confidence == 0.85
     assert tip.window_start_ms == 0
     assert tip.window_end_ms == 4000
-    # And the bus subscriber saw it
     assert any(isinstance(e, CoachTipEvent) for e in received)
 
 
@@ -180,11 +168,6 @@ async def test_handles_llm_raising():
     assert tip is None  # never crashes the bus
 
 
-# ---------------------------------------------------------------------------
-# Run loop
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_run_loop_consumes_published_events():
     bus = EventBus()
@@ -208,11 +191,6 @@ async def test_run_loop_consumes_published_events():
     stop.set()
     await asyncio.wait_for(runner, timeout=1.0)
     assert len(coach._spans) >= 1
-
-
-# ---------------------------------------------------------------------------
-# JSON parsing edge cases
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

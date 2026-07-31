@@ -1,11 +1,8 @@
 """In-process pub/sub bus for live transcript events.
 
-The pipeline (capture → STT → diarize → stitcher) calls
-`bus.publish(event)`. The FastAPI SSE endpoint subscribes via
-`async for event in bus.subscribe(): ...`.
-
-Multiple subscribers each get their own queue; slow subscribers don't
-block the publisher (we drop oldest events past the queue cap).
+The capture pipeline publishes; the SSE endpoint subscribes. Each subscriber
+gets its own queue, and events past the queue cap are dropped rather than
+blocking the publisher.
 """
 
 from __future__ import annotations
@@ -26,10 +23,8 @@ _DEFAULT_CAP = 1024
 class EventBus:
     """Fan-out async event bus, one queue per subscriber.
 
-    Slow subscribers don't block the publisher: when a subscriber queue
-    is full we drop the oldest event and bump a per-bus counter
-    (``dropped_events``). Production callers can poll it to detect when
-    a UI tab or SSE client has stalled.
+    A full subscriber queue drops its oldest event and increments
+    ``dropped_events``, which callers can poll to detect a stalled client.
     """
 
     def __init__(self, queue_cap: int = _DEFAULT_CAP) -> None:
@@ -44,12 +39,11 @@ class EventBus:
             subs = list(self._subscribers)
         for q in subs:
             if q.qsize() >= self._queue_cap:
-                # Drop oldest; pipeline must keep producing.
                 with contextlib.suppress(asyncio.QueueEmpty):
                     q.get_nowait()
                 self._dropped_events += 1
-                # Warn at exponential-backoff intervals so we don't
-                # flood the log on a persistently-stalled subscriber.
+                # Warn only on powers of two, so a persistently stalled
+                # subscriber cannot flood the log.
                 if self._dropped_events & (self._dropped_events - 1) == 0:
                     self._slow_subscriber_warnings += 1
                     log.warning(
@@ -76,12 +70,11 @@ class EventBus:
                 self._subscribers.discard(q)
 
     async def subscribe(self) -> AsyncIterator[Event]:
-        """Convenience: yield events forever until the consumer cancels."""
+        """Yield events until the consumer cancels."""
         async with self.subscription() as q:
             while True:
                 yield await q.get()
 
 
-# Process-global default bus. The CLI publishes to this; the FastAPI app
-# subscribes from this. Tests construct their own EventBus instances.
+# Process-global bus shared by the CLI publisher and the FastAPI app.
 default_bus = EventBus()

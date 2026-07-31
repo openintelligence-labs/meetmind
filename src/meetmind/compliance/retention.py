@@ -1,24 +1,12 @@
-"""Retention TTL enforcement (S14.4).
+"""Retention TTL enforcement: an idempotent sweep over meetings and speakers.
 
-Idempotent sweep that deletes meetings older than ``meetings_ttl_days``
-and speakers (incl. their voiceprints) older than ``voiceprint_ttl_days``.
-Run on demand via ``meetmind compliance retention-sweep`` or wire into
-cron / launchd.
+Default TTLs track the strictest applicable bound. Meetings get the BIPA
+biometric bound of 1095 days, rather than a longer operational-record window,
+because transcripts routinely contain identifiable utterances; voiceprints get
+the CUBI bound of 365 days past expiry of purpose.
 
-The default TTLs are intentionally conservative:
-  * meetings: 1095 days (3y) — BIPA upper bound for biometric records;
-    operational records can usually live longer but we apply the
-    biometric bound to the whole meeting because transcripts often
-    contain identifiable utterances.
-  * voiceprints: 365 days (1y) — CUBI mandatory upper bound when
-    purpose has expired.
-
-Override per-org via ``MEETMIND_RETENTION_MEETINGS_DAYS`` and
-``MEETMIND_RETENTION_VOICEPRINT_DAYS`` env vars.
-
-Consent events are NEVER deleted by this sweep — they're the proof-of-
-consent retention requirement under GDPR Art. 7(1) and stay even after
-the speaker they reference has been forgotten (tombstoned).
+Consent events are never deleted here. They are the GDPR Art. 7(1)
+proof-of-consent record and must outlive the speaker they reference.
 """
 
 from __future__ import annotations
@@ -89,8 +77,6 @@ def sweep(
     deleted_speakers: list[str] = []
 
     with Store.open(db_path) as store:
-        # Meetings: anything ended_at (or started_at, or created_at) older
-        # than the cutoff is past its TTL.
         for m in store.list_meetings(limit=100000):
             ts = m.ended_at or m.started_at or m.created_at
             if ts is None:
@@ -102,8 +88,7 @@ def sweep(
                 if not dry_run:
                     store.forget_meeting(m.id)
 
-        # Speakers: any voiceprint whose `consent_ts` is older than the
-        # voiceprint TTL is purged. The ConsentEvent tombstone remains.
+        # Purging a speaker leaves its ConsentEvent tombstone in place.
         rows = store.conn.execute(
             "SELECT id, consent_ts FROM speakers WHERE voiceprint_centroid IS NOT NULL"
         ).fetchall()

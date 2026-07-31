@@ -1,21 +1,8 @@
-"""MCP `prompts/*` primitives for MeetMind.
+"""MCP `prompts/*` primitives: parameterized templates clients render locally.
 
-Prompts are reusable, parameterized templates an MCP client can pull and
-render before sending to its own LLM. They are NOT executed server-side
-— MeetMind ships the *text*, the client decides what model to feed it
-to. This is the spec's intent: prompts are user-discoverable, not
-server-private.
-
-The catalog is small and curated. Each entry is a known-good template
-that pairs naturally with our resources (transcripts, summaries,
-decisions, action items) — e.g. ``daily_digest`` reads
-``meetmind://meetings`` filtered to the past 24h and asks the client to
-synthesize. ``what_changed`` compares two meeting URIs.
-
-Wire shape per MCP 2025-11:
-
-  prompts/list  → {prompts: [{name, description, arguments: [...]}]}
-  prompts/get   → {messages: [{role, content: {type:'text', text:'...'}}]}
+Nothing here is executed server-side; the server ships the text and the client
+picks the model. Each template is written against the resources exposed by
+`mcp_resources`.
 """
 
 from __future__ import annotations
@@ -53,23 +40,18 @@ class PromptDescriptor:
         }
 
     def render(self, args: dict[str, Any]) -> str:
-        # Validate required args first so we can give a useful error
-        # rather than KeyError-ing inside .format().
+        # Validate required args first, so the error names them instead of
+        # surfacing as a KeyError from inside .format().
         missing = [a.name for a in self.arguments if a.required and not args.get(a.name)]
         if missing:
             raise KeyError(f"prompt {self.name!r} missing required args: {missing}")
-        # Fill defaults for missing optional args so format() doesn't blow up.
+        # Optional args default to empty so .format() has every placeholder.
         filled = {a.name: "" for a in self.arguments}
         filled.update({k: v for k, v in args.items() if v is not None})
         try:
             return self.template.format(**filled)
         except KeyError as e:  # pragma: no cover — guards against malformed templates
             raise KeyError(f"prompt template references unknown arg: {e}") from e
-
-
-# ---------------------------------------------------------------------------
-# Catalog
-# ---------------------------------------------------------------------------
 
 
 _DAILY_DIGEST = PromptDescriptor(
@@ -250,7 +232,7 @@ def get_prompt(name: str) -> PromptDescriptor | None:
 
 
 def render_prompt(name: str, args: dict[str, Any] | None = None) -> str:
-    """Render a prompt to its final text. Raises ``KeyError`` for unknown name."""
+    """Render a prompt to its final text. Raises ``KeyError`` for an unknown name."""
     prompt = _PROMPTS.get(name)
     if prompt is None:
         raise KeyError(f"unknown prompt: {name}")

@@ -1,16 +1,12 @@
-"""DPIA (Data Protection Impact Assessment) generator (S14.1).
+"""DPIA (Data Protection Impact Assessment) generator.
 
-Introspects a MeetMind install and emits a Markdown DPIA describing
-what data is stored, where, how long, lawful basis, and recipients.
-Designed for self-hosters and EU enterprise procurement teams who need
-to prove the install is GDPR-compatible without reading the codebase.
+Introspects an install and emits a Markdown DPIA covering what data is
+stored, where, for how long, under what lawful basis, and with which
+recipients. No LLM and no network: it reads the on-disk store, the
+environment, and the configured providers.
 
-Pure-Python; no LLM, no network. Reads the on-disk store, the env, and
-the configured providers via ``analyze.llm.llm_config_summary``.
-
-The output isn't a substitute for legal advice — it's a starting
-template that captures the install's *technical* state so legal can
-focus on the policy bits (lawful basis selection, etc.).
+The output captures the install's technical state as a starting template;
+it is not a substitute for legal review of the policy fields.
 """
 
 from __future__ import annotations

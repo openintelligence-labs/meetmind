@@ -1,18 +1,11 @@
 """Parakeet TDT 0.6B v3 STT backend (FluidAudio sidecar).
 
-Spawns the `meetmind-stt-macos` Swift binary which wraps FluidAudio's
-Parakeet TDT 0.6B v3 (CC-BY-4.0; CoreML/ANE on Apple Silicon). Speaks
-the IPC frame format defined in ``meetmind.ipc.protocol``.
+Spawns the `meetmind-stt-macos` Swift binary and speaks the IPC frame format
+defined in ``meetmind.ipc.protocol``.
 
-This adapter is tested against a mock STT sidecar in CI; the production
-path runs the native binary.
-
-Concurrency: only one task reads stdout — `_drain_loop`. It demuxes frames
-by type into two queues:
-  - `_ack_q` — CONTROL_ACK frames, awaited by `_send_control`.
-  - `_event_q` — PARTIAL/FINAL/BYE frames, awaited by `stream`.
-This lets `stream` and `_send_control` cooperate without racing on stdin
-or stdout.
+Concurrency: exactly one task reads stdout, `_drain_loop`, which demuxes
+CONTROL_ACK frames into `_ack_q` and PARTIAL/FINAL/BYE into `_event_q`. That
+is what keeps `stream` and `_send_control` from racing on the pipes.
 """
 
 from __future__ import annotations
@@ -96,8 +89,7 @@ class ParakeetSidecarBackend:
             raise IPCError(f"STT sidecar did not say HELLO; got {hello.type if hello else None}")
 
         self._drain_task = asyncio.create_task(self._drain_loop(), name="stt-drain")
-        # First-time start may need to download multi-hundred-MB models.
-        # Allow up to 5 minutes for model setup.
+        # Generous timeout: a first run downloads several hundred MB of models.
         await self._send_control(
             "start",
             {"model": self.model, "language": self.language},
@@ -219,7 +211,7 @@ class ParakeetSidecarBackend:
                     if self._event_q.empty():
                         return
         finally:
-            # Always cancel the feeder so consume cancellation propagates.
+            # Cancel the feeder so cancellation of the consumer propagates.
             if not feeder.done():
                 feeder.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):

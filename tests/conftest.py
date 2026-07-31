@@ -1,15 +1,9 @@
 """Global pytest configuration.
 
-Two responsibilities:
-
-  1. Disable the OS-keychain DEK path. Tests must never write a key to
-     the developer's real keychain — that would persist across runs and
-     leak state. `MEETMIND_DISABLE_ENCRYPTION=1` makes `Store.open()`
-     skip the keychain lookup and run the stdlib sqlite3 driver.
-
-  2. Block accidental outbound network calls. Most code paths are
-     loopback-only by design; this catches regressions where a new
-     dependency would silently dial the network during tests.
+Disables the OS-keychain DEK path so tests never write a key to the
+developer's real keychain, where it would persist and leak state across runs.
+`MEETMIND_DISABLE_ENCRYPTION=1` makes `Store.open()` skip the keychain lookup
+and use the stdlib sqlite3 driver.
 """
 
 from __future__ import annotations

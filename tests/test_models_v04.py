@@ -1,8 +1,5 @@
-"""Tests for the v0.4 data model additions.
-
-Covers: ChannelKind, MeetingTemplate, ms-helper conversions, Speaker,
-ActionItem evidence-quote/status, Decision, ConsentEvent, Meeting
-audio paths and signing fields.
+"""Tests for ChannelKind, MeetingTemplate, ms-helper conversions, Speaker,
+ActionItem, Decision, ConsentEvent, and Meeting audio/signing fields.
 """
 
 from __future__ import annotations

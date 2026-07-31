@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-# Make `meetmind` importable when the runner spawns us as a subprocess.
+# Make `meetmind` importable when spawned as a subprocess.
 _THIS = Path(__file__).resolve()
 _REPO_SRC = _THIS.parents[2] / "src"
 if str(_REPO_SRC) not in sys.path:
@@ -164,5 +164,5 @@ def fixture_binary() -> Path:
     return launcher
 
 
-# Ensure encode_frame's 4-byte length prefix is the same we documented.
+# Pin encode_frame's 4-byte length prefix against the documented format.
 assert struct.calcsize("<BI") == 5

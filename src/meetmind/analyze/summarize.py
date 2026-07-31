@@ -1,19 +1,8 @@
-"""Chain-of-Density summarizer.
+"""Chain-of-Density summarizer (Adams et al. 2023).
 
-Two-pass:
-  1. Draft a sparse, low-density summary that names the meeting's
-     headline topics.
-  2. Densify: rewrite to the same length but cram in 2-3 missing
-     entities that aren't yet covered.
-
-The CoD pattern is from Adams et al. 2023 — it consistently produces
-shorter, more entity-dense summaries than single-pass prompts. We cap
-at 2 passes (architecture documents this is the sweet spot for
-meetings; more passes start hallucinating).
-
-Output is `meetmind.models.Summary` with tl_dr + key_decisions +
-action_items (the latter two are pulled in from `analyze.decisions`
-and `analyze.actions` rather than re-extracted here).
+Drafts a sparse summary, then densifies it with missing entities at the same
+length. Key decisions and action items come from `analyze.decisions` and
+`analyze.actions`; they are not re-extracted here.
 """
 
 from __future__ import annotations
@@ -92,9 +81,8 @@ def summarize_meeting(
 ) -> SummarizeResult:
     """Run Chain-of-Density and return a `Summary` populated with prose.
 
-    `key_decisions` and `action_items` come from upstream extractors
-    (architecture decouples summary from extraction so we get clean
-    citation guarantees on actions/decisions).
+    `key_decisions` and `action_items` are passed through from the upstream
+    extractors, which carry their own citation guarantees.
     """
     draft_raw = llm(build_draft_prompt(transcript_window))
     draft = _DraftPayload.model_validate(draft_raw)
@@ -108,7 +96,7 @@ def summarize_meeting(
         except Exception:  # noqa: BLE001 — fall back to draft if densify malforms
             log.info("densify pass returned malformed payload; keeping previous draft")
             break
-        # Reject if the densified draft drops the entity count.
+        # No new entities means densification has converged.
         if len(dense.missing_entities) == 0:
             break
         current = _DraftPayload(tl_dr=dense.tl_dr, headline_topics=dense.headline_topics)

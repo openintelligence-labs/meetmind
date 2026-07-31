@@ -1,29 +1,12 @@
 """Local HTTP API server (FastAPI on 127.0.0.1).
 
-Endpoints:
-  GET  /                     — overlay UI (static, served from tauri/ui/)
-  GET  /v1/health            — unauthenticated liveness probe
-  GET  /v1/info              — bound version + protocol metadata
-  GET  /v1/auth/handshake    — localhost-only token handshake (no auth)
-  GET  /v1/transcripts/live  — SSE stream of live transcript events
-  GET  /v1/meetings          — list archived meetings (dashboard)
-  GET  /v1/meeting/{id}      — single meeting (+ transcript, actions, decisions)
-  GET  /v1/search            — hybrid lexical+dense search across the archive
+Every endpoint except `/v1/health` and `/v1/auth/handshake` requires
+`Authorization: Bearer <token>` using the ephemeral per-launch token. The
+handshake is exempt because it only answers loopback callers, which lets the
+same-origin overlay UI start without the user pasting a token.
 
-Auth:
-  All non-health endpoints require `Authorization: Bearer <token>`,
-  where `<token>` is the ephemeral per-launch token written to
-  `~/.meetmind/token` (mode 0600).
-
-  The handshake endpoint is the exception: it returns the token to
-  callers connecting *from the loopback interface itself*. That makes
-  the same-origin overlay UI usable without copy-pasting a token —
-  a remote attacker cannot reach 127.0.0.1 from another host, so the
-  loopback check is a sufficient origin proof.
-
-Bind:
-  Always 127.0.0.1 only. The `serve()` helper enforces this — `host`
-  is not a parameter.
+`serve()` binds 127.0.0.1 unconditionally; `host` is deliberately not a
+parameter.
 """
 
 from __future__ import annotations
@@ -46,10 +29,9 @@ from meetmind.api.bus import EventBus, default_bus
 from meetmind.api.events import Event
 from meetmind.memory.store import Store
 
-# Directory holding the static overlay UI. Resolved relative to the
-# repo root; in an installed wheel we'd ship it under
-# ``meetmind/_ui/`` and resolve via ``importlib.resources``, but for
-# v0.x dev workflow this path is correct.
+# Static overlay UI, resolved relative to the repo root. An installed wheel
+# ships it under ``meetmind/_ui/`` instead and resolves via
+# ``importlib.resources``, so this path is dev-layout-specific.
 UI_DIR = Path(__file__).resolve().parents[3] / "tauri" / "ui"
 
 log = logging.getLogger(__name__)
@@ -58,16 +40,11 @@ log = logging.getLogger(__name__)
 def _cors_regex(port: int | None) -> str:
     """Build the CORS ``allow_origin_regex`` for a given bound port.
 
-    Three classes of origin are accepted:
-      • ``null`` / ``file://`` — for the dev workflow of opening the
-        bundled overlay straight from disk;
-      • ``tauri://localhost`` — the Tauri WebView's hard-coded origin;
-      • ``http(s)://(localhost|127.0.0.1):<port>`` — the running server's
-        own port, or any localhost port if ``port`` is None.
-
-    Narrowing to a single port shuts the door on a malicious browser
-    tab running on another local server (e.g. a long-lived devtool on
-    :3000) from speaking to the MeetMind API after a token leak.
+    Accepts ``null``/``file://`` (overlay opened from disk),
+    ``tauri://localhost`` (the Tauri WebView's fixed origin), and localhost on
+    ``port`` — or any localhost port when ``port`` is None. Pinning the port
+    stops a malicious tab served by another local server from reaching this
+    API if the token ever leaks.
     """
     if port is None:
         host_clause = r"(localhost|127\.0\.0\.1)(:\d+)?"
@@ -82,12 +59,10 @@ def create_app(
     *,
     port: int | None = None,
 ) -> FastAPI:
-    """Construct the FastAPI app bound to a specific token + bus.
+    """Construct the FastAPI app bound to a specific token and bus.
 
-    ``port`` (when supplied) narrows the CORS allow-list to that exact
-    port. Without it (legacy callers + tests) any localhost port is
-    accepted. Production ``serve()`` always passes its bound port, so
-    real deployments never expose the broad regex.
+    ``port`` narrows the CORS allow-list to that exact port; omitting it
+    accepts any localhost port. ``serve()`` always passes its bound port.
     """
     bus = bus or default_bus
     auth = BearerAuth(token)
@@ -97,12 +72,10 @@ def create_app(
         docs_url=None,  # don't expose interactive docs to localhost browsers
         redoc_url=None,
     )
-    # The bundled overlay (`tauri/ui/index.html`) is opened via `file://`
-    # in dev — browsers send the `Origin: null` header for those, and
-    # block the cross-origin fetch unless we explicitly allow it. Tauri's
-    # WebView is `tauri://localhost`. Bearer-token auth on the endpoints
-    # themselves remains the real authorization gate; CORS is defence in
-    # depth against a same-machine malicious browser tab.
+    # `file://`-opened overlays send `Origin: null` and Tauri's WebView sends
+    # `tauri://localhost`; both are blocked without an explicit allow-list.
+    # Bearer auth is the real gate — CORS is defence in depth against a
+    # same-machine malicious browser tab.
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=_cors_regex(port),
@@ -132,11 +105,9 @@ def create_app(
     async def handshake(request: Request) -> dict[str, str]:
         """Return the bearer token to a loopback caller.
 
-        Anyone who can reach 127.0.0.1 over TCP is already on the same
-        host as the server (modulo a malicious local user, against
-        which the file-mode-0600 token is the real defense). Returning
-        the token here saves the user from copy-pasting it into the
-        overlay UI on every launch.
+        Reaching 127.0.0.1 over TCP already proves same-host access; the
+        0600 token file is the defense against other local users. This saves
+        the user from pasting the token into the overlay on every launch.
         """
         client = request.client
         host = client.host if client is not None else ""
@@ -148,8 +119,7 @@ def create_app(
     async def transcripts_live() -> StreamingResponse:
         async def event_stream():
             async with bus.subscription() as q:
-                # Send a comment line so curl-style clients see traffic
-                # immediately and confirm the stream is alive.
+                # Comment line so clients see traffic before the first event.
                 yield ":connected\n\n"
                 while True:
                     event = await q.get()
@@ -164,13 +134,9 @@ def create_app(
             },
         )
 
-    # ─────────────── archive endpoints (powers dashboard.js) ───────────────
-    # These open the SQLCipher store on demand, count segments, and return
-    # dashboard-shaped JSON. The store path follows the same fallback
-    # chain as the CLI: $MEETMIND_HOME/data/meetmind.db then
-    # ~/.meetmind/data/meetmind.db. We never hold a long-lived handle from
-    # the request thread — sqlite is cheap to reopen and threads make
-    # connection pooling painful.
+    # Archive endpoints open the store on demand and never hold a long-lived
+    # handle from a request thread: sqlite is cheap to reopen, and pooling
+    # connections across threads is not.
 
     @app.get("/v1/meetings", dependencies=[Depends(auth)])
     async def list_meetings_route(limit: int = 200) -> dict[str, Any]:
@@ -186,8 +152,6 @@ def create_app(
     @app.get("/v1/search", dependencies=[Depends(auth)])
     async def search_route(q: str = "", limit: int = 20) -> dict[str, Any]:
         return _search(q, limit=limit)
-
-    # ─────────────── recording control (UI start/stop) ───────────────
 
     @app.post("/v1/recording/start", dependencies=[Depends(auth)])
     async def start_recording_route(request: Request) -> dict[str, Any]:
@@ -217,16 +181,12 @@ def create_app(
     async def meeting_audio_route(meeting_id: str, stream: str, request: Request) -> FileResponse:
         """Stream a persisted WAV file for one stream of a meeting.
 
-        404 if the meeting wasn't recorded with ``--persist-audio`` (the
-        WAV path on disk doesn't exist). Path is sanity-checked against
-        the persisted ``Meeting.audio_path_*`` columns to prevent any
-        path-traversal via the URL.
+        404s when the meeting was recorded without ``--persist-audio``. The
+        served path comes from the stored ``Meeting.audio_path_*`` columns,
+        never from the URL, so the route cannot be walked to another file.
 
-        Auth: HTML5 ``<audio>`` elements can't send ``Authorization``
-        headers, so this route accepts the bearer token via either
-        ``Authorization: Bearer <t>`` OR ``?t=<token>``. The query-param
-        path is only accepted for this specific route — everything else
-        requires the header.
+        HTML5 ``<audio>`` cannot send an ``Authorization`` header, so this
+        route alone also accepts the token as ``?t=<token>``.
         """
         from secrets import compare_digest  # noqa: PLC0415
 
@@ -256,9 +216,8 @@ def create_app(
     async def patch_meeting_route(meeting_id: str, request: Request) -> dict[str, Any]:
         """Rename a meeting. Body: ``{"title": "new title"}``.
 
-        Only ``title`` is mutable — started/ended/duration are derived
-        from the recording session, and we don't want stale UI writes
-        to overwrite them.
+        Only ``title`` is mutable; the timing fields are derived from the
+        recording session and must not be clobbered by a stale UI write.
         """
         body = await request.json()
         new_title = (body.get("title") or "").strip()
@@ -279,14 +238,10 @@ def create_app(
     ) -> dict[str, Any]:
         """Run an integration exporter for a meeting.
 
-        Body shape depends on target:
-          • obsidian: ``{"vault_path": "/abs/path"}``
-          • slack:    ``{"webhook_url": "https://..."}`` (or rely on env)
-          • github:   ``{"repo": "owner/name", "dry_run": false}``
-
-        Returns the exporter's structured result; never raises on
-        integration-level errors (the body's ``ok`` flag indicates
-        success/failure). Auth-required.
+        The body carries per-target options: ``vault_path`` for obsidian,
+        ``webhook_url`` for slack, ``repo``/``dry_run`` for github. Returns
+        the exporter's structured result; integration-level failures surface
+        as ``ok: false`` rather than an exception.
         """
         body: dict[str, Any] = {}
         with contextlib.suppress(Exception):
@@ -335,12 +290,9 @@ def create_app(
 
     @app.get("/v1/compliance/status", dependencies=[Depends(auth)])
     async def compliance_status_route() -> dict[str, Any]:
-        """Surface compliance-posture facts the dashboard can render.
+        """Report storage mode, retention TTLs, and retained-record counts.
 
-        Computed live so the UI never drifts from reality:
-          • storage mode (encrypted vs unencrypted vs disabled),
-          • retention TTLs in effect (env-tunable),
-          • count of meetings + speakers currently subject to retention.
+        Computed per request so the dashboard cannot drift from actual state.
         """
         from meetmind.compliance.retention import RetentionPolicy  # noqa: PLC0415
         from meetmind.memory.keyring import get_or_create_dek  # noqa: PLC0415
@@ -393,11 +345,10 @@ def create_app(
 
     @app.post("/v1/meeting/{meeting_id}/diarize", dependencies=[Depends(auth)])
     async def diarize_meeting_route(meeting_id: str) -> dict[str, Any]:
-        """Run post-hoc diarization on a recorded meeting from the UI.
+        """Run post-hoc diarization on a recorded meeting.
 
-        Requires the meeting was recorded with audio persistence;
-        without it, falls back to the channel-label synthesizer (no
-        clustering gain, but doesn't crash).
+        Without persisted audio this falls back to the channel-label
+        synthesizer, which yields no clustering gain but still succeeds.
         """
         from meetmind.cli import _diarize_meeting  # noqa: PLC0415
 
@@ -412,16 +363,14 @@ def create_app(
 
     @app.delete("/v1/meeting/{meeting_id}", dependencies=[Depends(auth)])
     async def delete_meeting_route(meeting_id: str) -> dict[str, Any]:
-        """Hard-delete a meeting + cascade (segments, actions, decisions,
-        summary). Also unlinks persisted WAV files for the meeting."""
+        """Hard-delete a meeting, its cascaded rows, and its persisted WAVs."""
         db = _default_db_path()
         with Store.open(db) as store:
             meeting = store.get_meeting(meeting_id)
             if meeting is None:
                 raise HTTPException(status_code=404, detail="meeting not found")
-            # Best-effort: remove persisted audio first. If unlink fails,
-            # the row delete still proceeds — the orphaned WAV is
-            # picked up later by the retention sweep.
+            # A failed unlink must not block the row delete; the retention
+            # sweep collects any orphaned WAV later.
             for p in (meeting.audio_path_mic, meeting.audio_path_loopback):
                 if p is None:
                     continue
@@ -430,9 +379,9 @@ def create_app(
             store.forget_meeting(meeting_id)
         return {"ok": True, "meeting_id": meeting_id, "deleted": True}
 
-    # Static UI — same origin as the API kills CORS, lets the overlay
-    # auto-handshake the bearer token on load. Mounted last so the
-    # `/v1/*` routes always win over the static fallback.
+    # Serving the UI same-origin with the API avoids CORS entirely and lets
+    # the overlay auto-handshake its token on load. Mounted last so `/v1/*`
+    # always wins over the static fallback.
     if UI_DIR.is_dir():
 
         @app.get("/")
@@ -454,11 +403,8 @@ def _format_sse(event: Event) -> str:
     return f"event: {event.kind}\ndata: {json.dumps(payload)}\n\n"
 
 
-# ─────────────────────── recording session (UI-driven) ───────────────────────
-# Single shared session — the server hosts at most one recording at a time.
-# Start spawns a `_run_record` task in this process so it publishes onto the
-# same in-process bus the dashboard subscribes to. Stop fires a stop_event.
-
+# At most one recording at a time. Start spawns `_run_record` in this process
+# so it publishes onto the same in-process bus the dashboard subscribes to.
 _recording_lock = asyncio.Lock()
 _recording_state: dict[str, Any] = {
     "task": None,
@@ -493,8 +439,7 @@ async def _start_recording_session(
         if existing is not None and not existing.done():
             raise HTTPException(status_code=409, detail="recording already in progress")
 
-        # Resolve sidecars + stream id. Lazy-imported from cli to keep
-        # the api module decoupled.
+        # Lazy-imported from cli to keep the api module decoupled.
         from meetmind.cli import _find_capture_sidecar, _find_mock_capture, _run_record
         from meetmind.stt.parakeet_v3 import find_stt_sidecar
 
@@ -535,10 +480,8 @@ async def _start_recording_session(
         task = asyncio.create_task(_runner(), name="api-record")
         _recording_state["task"] = task
 
-        # Best-effort: peek the meeting id once it's been created. We do
-        # this by polling the store for new meetings within a short
-        # window — `_run_record` writes the meeting row before any
-        # transcripts arrive.
+        # `_run_record` writes the meeting row before any transcripts arrive,
+        # so poll briefly for it rather than plumbing the id back out.
         async def _track_meeting_id() -> None:
             for _ in range(40):  # ~4s
                 await asyncio.sleep(0.1)
@@ -583,10 +526,10 @@ async def _stop_recording_session() -> dict[str, Any]:
 
 
 async def _summarize_meeting_via_api(meeting_id: str) -> dict[str, Any]:
-    """Run summarize in the API process, return the persisted summary.
+    """Run summarize in the API process and return the persisted summary.
 
-    The CLI handler writes to stdout — that's fine for the terminal but
-    we want JSON here. Reuse the analyze functions directly.
+    Calls the analyze functions directly rather than the CLI handler, which
+    writes to stdout.
     """
     db = _default_db_path()
     if not db.exists():
@@ -609,9 +552,7 @@ async def _summarize_meeting_via_api(meeting_id: str) -> dict[str, Any]:
         segments = store.list_segments(meeting_id)
         transcript_window = "\n".join(s.text for s in segments if s.text)
 
-        # Run the LLM-heavy work off the event loop so the API stays
-        # responsive. The actants LLM helpers already have their own
-        # worker-thread bridge, but we still want async clarity here.
+        # Run the LLM-heavy work off the event loop so the API stays responsive.
         loop = asyncio.get_running_loop()
         llm_holder: dict[str, Any] = {}
 
@@ -649,7 +590,6 @@ async def _summarize_meeting_via_api(meeting_id: str) -> dict[str, Any]:
 
         result = await loop.run_in_executor(None, _do_summarize)
 
-        # Persist
         for a in result["actions"].accepted:
             store.upsert_action_item(meeting_id, a)
         for d in result["decisions"].accepted:
@@ -673,11 +613,8 @@ async def _summarize_meeting_via_api(meeting_id: str) -> dict[str, Any]:
     }
 
 
-# ─────────────────────── archive helpers ───────────────────────
-
-
 def _default_db_path() -> Path:
-    """Same fallback chain as the CLI."""
+    """Resolve the store path using the same fallback chain as the CLI."""
     import os
 
     base = Path(os.environ.get("MEETMIND_HOME", str(Path.home() / ".meetmind")))
@@ -773,11 +710,9 @@ def _search(query: str, *, limit: int = 20) -> dict[str, Any]:
     from meetmind.memory.store import Store
     from meetmind.memory.vector import HybridIndex, hash_embedder
 
-    # Lightweight fallback embedder so search works even when nomic-embed
-    # isn't installed locally. The real index was built with whatever
-    # embedder `meetmind index` ran with — for cross-process search the
-    # hash_embedder works as a passable approximation; with a real
-    # embedder we'd plug it in here too.
+    # Fallback embedder so search works without nomic-embed installed. The
+    # index was built by `meetmind index` with whatever embedder it had, so
+    # this only approximates the dense half of the ranking.
     index = HybridIndex.open(lance, vector_dim=768, embedder=hash_embedder(768))
     hits = index.search(query, limit=limit)
     titles: dict[str, str] = {}
@@ -814,10 +749,10 @@ async def serve(
 ) -> None:
     """Run the API server on 127.0.0.1:<port> until the task is cancelled.
 
-    If `token` is None, generate one and write it to ~/.meetmind/token.
-    Otherwise, the caller is responsible for token persistence.
+    A None `token` is generated and written to ~/.meetmind/token; otherwise
+    the caller owns token persistence.
     """
-    import uvicorn  # local import — only needed if `[api]` extra is installed
+    import uvicorn  # only needed when the `[api]` extra is installed
 
     if token is None:
         token = generate_token()

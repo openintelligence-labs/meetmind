@@ -1,24 +1,7 @@
-"""Voiceprint embedder.
+"""Voiceprint embedders: ONNX (ReDimNet-B3 / ECAPA-TDNN) and a deterministic
+mel-hash fallback for when no ONNX model is on disk.
 
-Two backends:
-
-  • ``ONNXVoiceprintEmbedder`` — production. Loads ReDimNet-B3 (192-d,
-    MIT) or ECAPA-TDNN (192-d, Apache-2.0) from a local ONNX file at
-    ``MEETMIND_VOICEPRINT_MODEL`` (or ``~/.cache/meetmind/voiceprint.onnx``).
-    Real inference, real cosine separability.
-  • ``MelHashVoiceprintEmbedder`` — deterministic fallback. Computes
-    log-mel features and projects them through a fixed Gaussian random
-    matrix to 192 dimensions. Not real speaker recognition — but
-    *consistent* across a session, so an enrolled centroid will match
-    its own samples. Lets the matcher + consent flow work end-to-end
-    without an ONNX model on disk. Used by tests + first-run UX.
-
-Both implement the ``Embedder`` Protocol below: take a 16 kHz mono
-float32 ``np.ndarray`` of audio samples and return a length-192 unit
-vector.
-
-Auto-selection lives in ``default_embedder()`` — picks ONNX if a model
-is configured, falls back to the mel-hash embedder otherwise.
+Both take 16 kHz mono float32 audio and return a length-192 unit vector.
 """
 
 from __future__ import annotations
@@ -37,10 +20,6 @@ log = logging.getLogger(__name__)
 VOICEPRINT_DIM = 192
 SAMPLE_RATE = 16_000
 
-# A sane default mel filterbank for both backends. Production will
-# also pass these through the ONNX model's preprocessor where the
-# model expects raw waveform; the mel features here are used only by
-# the fallback embedder.
 N_MELS = 64
 WIN_LEN = 400  # 25 ms @ 16 kHz
 HOP_LEN = 160  # 10 ms @ 16 kHz
@@ -57,11 +36,6 @@ class Embedder(Protocol):
     def embed(self, audio: np.ndarray, *, sample_rate: int = SAMPLE_RATE) -> np.ndarray:
         """Return a unit-normalized embedding for one audio span."""
         ...
-
-
-# ---------------------------------------------------------------------------
-# Mel-hash fallback embedder
-# ---------------------------------------------------------------------------
 
 
 def _hz_to_mel(hz: float) -> float:
@@ -92,12 +66,7 @@ def _mel_filterbank(n_mels: int, n_fft: int, sr: int) -> np.ndarray:
 
 
 def _log_mel(audio: np.ndarray, sr: int) -> np.ndarray:
-    """Compute log-mel features. Returns ``(n_mels,)`` time-mean vector.
-
-    The mean-pool keeps the embedder cheap and produces a fixed-size
-    descriptor regardless of segment duration. Real ReDimNet does
-    something far more sophisticated; this is a baseline.
-    """
+    """Log-mel features, mean-pooled over time into an ``(n_mels,)`` vector."""
     if audio.size < WIN_LEN:
         return np.zeros(N_MELS, dtype=np.float32)
     n_fft = 512
@@ -123,7 +92,7 @@ def _stable_projection(in_dim: int, out_dim: int, *, seed: bytes) -> np.ndarray:
     """Deterministic random projection matrix, keyed by ``seed`` bytes."""
     state = int.from_bytes(hashlib.sha256(seed).digest()[:8], "big")
     rng = np.random.default_rng(state)
-    # Random Gaussian, scaled by 1/sqrt(out_dim) so the result has unit-ish norm.
+    # Scaled by 1/sqrt(out_dim) so the projection has unit-ish norm.
     return rng.standard_normal((in_dim, out_dim)).astype(np.float32) / np.sqrt(out_dim)
 
 
@@ -132,7 +101,11 @@ _PROJECTION_SEED = b"meetmind-voiceprint-mel-hash-v1"
 
 @dataclass
 class MelHashVoiceprintEmbedder:
-    """Deterministic baseline. Same audio → same embedding, every run."""
+    """Deterministic baseline embedder: same audio gives the same embedding.
+
+    Not real speaker recognition, but consistent enough that an enrolled
+    centroid matches its own samples without an ONNX model on disk.
+    """
 
     name: str = "mel-hash-v1"
     dim: int = VOICEPRINT_DIM
@@ -145,7 +118,6 @@ class MelHashVoiceprintEmbedder:
         if audio.dtype != np.float32:
             audio = audio.astype(np.float32, copy=False)
         if sample_rate != SAMPLE_RATE:
-            # Cheap linear resample. The fallback doesn't claim accuracy.
             ratio = SAMPLE_RATE / sample_rate
             n_out = int(audio.size * ratio)
             idx = (np.arange(n_out) / ratio).clip(max=audio.size - 1).astype(np.int64)
@@ -158,25 +130,14 @@ class MelHashVoiceprintEmbedder:
         return (vec / norm).astype(np.float32)
 
 
-# ---------------------------------------------------------------------------
-# ONNX embedder (ReDimNet-B3 / ECAPA-TDNN)
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class ONNXVoiceprintEmbedder:
-    """Real voiceprint embedder backed by an ONNX file.
+    """Voiceprint embedder backed by a local ONNX file.
 
-    The expected input shape depends on the model:
-
-      • **ReDimNet-B3** (the architecture default): expects raw 16 kHz
-        mono waveform as ``(1, samples)`` float32.
-      • **ECAPA-TDNN** (compatibility fallback): expects log-mel
-        features as ``(1, n_mels, frames)`` float32.
-
-    The ``input_kind`` field selects which preprocessing path runs.
-    Auto-detected on first call by inspecting ``session.get_inputs()``;
-    callers can override.
+    ``input_kind`` selects the preprocessing path: ``"waveform"`` feeds raw
+    ``(1, samples)`` audio (ReDimNet-B3), ``"log-mel"`` feeds
+    ``(1, n_mels, frames)`` features (ECAPA-TDNN). ``"auto"`` infers it from
+    the model's declared input rank.
     """
 
     model_path: Path
@@ -233,11 +194,6 @@ class ONNXVoiceprintEmbedder:
             self.dim = vec.size
         norm = float(np.linalg.norm(vec))
         return vec if norm <= 1e-12 else (vec / norm).astype(np.float32)
-
-
-# ---------------------------------------------------------------------------
-# Auto-selection
-# ---------------------------------------------------------------------------
 
 
 def default_embedder() -> Embedder:

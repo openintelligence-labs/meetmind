@@ -26,7 +26,7 @@ def _tone(samples: int, freq: float = 600.0, sr: int = 16_000) -> np.ndarray:
 
 def test_mock_backend_satisfies_protocol():
     backend = MockSTTBackend()
-    # Runtime-checkable Protocol — stays honest if we change base.py.
+    # Runtime-checkable Protocol, so this tracks changes to base.py.
     assert isinstance(backend, STTBackend)
     assert backend.name == "mock"
 

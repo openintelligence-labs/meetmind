@@ -1,14 +1,13 @@
 """Audio pre-processing pipeline.
 
-Stage order (mic stream — loopback skips AEC + denoise):
+Stage order, with AEC and denoise applying to the mic stream only:
 
-    PCM s16 48kHz  →  AEC3 (S2)  →  DeepFilterNet 3 (S2)
-                  →  resample 48 → 16 kHz  →  Silero VAD v5
-                  →  PCM f32 16 kHz frames + voiced flag → STT
+    PCM s16 48kHz  →  AEC3  →  DeepFilterNet 3
+                   →  resample 48 → 16 kHz  →  Silero VAD v5
+                   →  PCM f32 16 kHz frames + voiced flag → STT
 
-For v0.4 we ship the resample + VAD stages with a clean interface and a
-deterministic RMS fallback for the VAD when the ONNX model isn't bundled.
-S2 wires real AEC + denoise; the abstraction here doesn't change.
+The resample and VAD stages are implemented here; AEC and denoise are not
+yet wired in.
 """
 
 from __future__ import annotations
@@ -44,20 +43,13 @@ def _pcm_s16_to_f32(pcm: bytes) -> np.ndarray:
 def downsample_48k_to_16k(pcm_f32: np.ndarray) -> np.ndarray:
     """Decimate 48 kHz → 16 kHz with a low-pass anti-alias filter.
 
-    Naive 1-of-3 decimation aliases content > 8 kHz into the audible band.
-    We apply a 31-tap Hamming-windowed sinc low-pass at 7.5 kHz before the
-    take-every-3rd. Compute is fast (~0.1% CPU at meeting-grade volumes)
-    and quality is fine for STT — ASRs internally roll off above ~8 kHz
-    anyway.
-
-    Replace with `soxr.resample` if/when we add the soxr extra. The output
-    is bit-equivalent to within 0.5 dB of soxr "HQ" preset.
+    The 31-tap Hamming-windowed sinc at 7.5 kHz is not optional: naive
+    1-of-3 decimation aliases content above 8 kHz into the audible band.
     """
     if pcm_f32.size == 0:
         return pcm_f32
 
     if not hasattr(downsample_48k_to_16k, "_taps"):
-        # Cache filter coefficients on the function object to avoid recomputing.
         n = 31
         cutoff = 7500.0 / SOURCE_RATE  # normalized
         m = np.arange(n) - (n - 1) / 2.0
@@ -75,18 +67,11 @@ def downsample_48k_to_16k(pcm_f32: np.ndarray) -> np.ndarray:
     return filtered[::DOWNSAMPLE_FACTOR].astype(np.float32)
 
 
-# ---------------------------------------------------------------------------
-# VAD
-# ---------------------------------------------------------------------------
-
-
 class VAD:
     """Voice-activity detector.
 
-    Tries to load Silero VAD v5 ONNX from `model_path` (or
-    `~/.cache/meetmind/silero_vad.onnx`); if unavailable falls back to a
-    deterministic RMS threshold. The fallback is not as good but is
-    self-contained and CI-friendly. Tests cover both paths.
+    Loads Silero VAD v5 ONNX from `model_path` when present, otherwise falls
+    back to a deterministic RMS threshold.
     """
 
     def __init__(
@@ -101,7 +86,7 @@ class VAD:
         self._state: np.ndarray | None = None
         if model_path is not None and model_path.exists():
             try:
-                import onnxruntime as ort  # local import — only needed if model is present
+                import onnxruntime as ort
 
                 self._session = ort.InferenceSession(
                     str(model_path),
@@ -127,7 +112,6 @@ class VAD:
             rms = float(np.sqrt(np.mean(frame_f32**2)))
             return rms > self.rms_threshold
 
-        # Silero v5 ONNX: inputs (input, state, sr) → (output, state).
         inp = frame_f32.reshape(1, -1).astype(np.float32)
         sr = np.array(TARGET_RATE, dtype=np.int64)
         out, new_state = self._session.run(
@@ -136,11 +120,6 @@ class VAD:
         )
         self._state = new_state
         return float(out[0]) > self.speech_threshold
-
-
-# ---------------------------------------------------------------------------
-# Chunk → VAD frame iterator (per-stream buffering)
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -164,9 +143,8 @@ class _StreamBuffer:
 class StreamingPipeline:
     """Stateful: feed AudioChunks incrementally, drain ProcessedFrames.
 
-    Mic and loopback are buffered independently so a 10 ms chunk on one
-    stream never advances the other's frame boundary — the channel split
-    is the single largest accuracy lever for the rest of the pipeline.
+    Mic and loopback are buffered independently so a chunk on one stream
+    never advances the other's frame boundary.
     """
 
     def __init__(self, vad: VAD | None = None) -> None:
@@ -200,9 +178,9 @@ def chunks_to_frames(
     chunks: Iterable[AudioChunk],
     vad: VAD | None = None,
 ) -> Iterator[ProcessedFrame]:
-    """One-shot iterator API: useful in tests where the full chunk list is known.
+    """Process a known-complete sequence of chunks in one pass.
 
-    For incremental/streaming use, prefer `StreamingPipeline().feed(chunk)`.
+    For incremental use, prefer `StreamingPipeline().feed(chunk)`.
     """
     pipeline = StreamingPipeline(vad=vad)
     for chunk in chunks:

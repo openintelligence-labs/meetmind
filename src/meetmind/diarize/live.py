@@ -1,12 +1,8 @@
 """Streaming Sortformer 4spk-v2 backend (FluidAudio sidecar).
 
-Same IPC shape as the STT adapter (`stt/parakeet_v3.py`): the sidecar
+Same IPC shape as the STT adapter in `stt/parakeet_v3.py`: the sidecar
 consumes AUDIO_F32 frames over stdin and emits DIAR_SEGMENT frames over
 stdout. Frame definitions live in `meetmind.capture.ipc`.
-
-For v0.5 we ship the **adapter** here; the production Swift binary
-(`meetmind-diar-macos`) is S2.3b. A pure-Python mock sidecar lives in
-`tests/fixtures/mock_diar_sidecar.py` for CI.
 """
 
 from __future__ import annotations

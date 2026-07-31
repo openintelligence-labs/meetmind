@@ -32,7 +32,7 @@ def test_old_db_gets_migrated_forward(tmp_path) -> None:
     s = Store.open(db_path, use_keychain=False)
     s.conn.execute("INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('schema_version','1')")
     s.close()
-    # Re-open: apply_schema should bump us forward.
+    # Re-open so apply_schema runs against the downgraded stamp.
     s2 = Store.open(db_path, use_keychain=False)
     try:
         assert _read_schema_version(s2.conn) == SCHEMA_VERSION
@@ -41,7 +41,7 @@ def test_old_db_gets_migrated_forward(tmp_path) -> None:
 
 
 def test_newer_db_is_not_downgraded(tmp_path, caplog: pytest.LogCaptureFixture) -> None:
-    """A DB stamped at v(SCHEMA_VERSION+5) keeps its stamp; we just warn."""
+    """A DB stamped ahead of SCHEMA_VERSION keeps its stamp and only warns."""
     db_path = tmp_path / "newer.db"
     s = Store.open(db_path, use_keychain=False)
     future_v = SCHEMA_VERSION + 5
@@ -53,7 +53,7 @@ def test_newer_db_is_not_downgraded(tmp_path, caplog: pytest.LogCaptureFixture) 
     with caplog.at_level("WARNING"):
         s2 = Store.open(db_path, use_keychain=False)
     try:
-        # We don't downgrade the stamp.
+        # The stamp is never downgraded.
         assert _read_schema_version(s2.conn) >= SCHEMA_VERSION
         assert any("newer than this build" in r.message for r in caplog.records)
     finally:
@@ -61,7 +61,7 @@ def test_newer_db_is_not_downgraded(tmp_path, caplog: pytest.LogCaptureFixture) 
 
 
 def test_wal_mode_is_enabled(tmp_path) -> None:
-    """The journal_mode PRAGMA from Task #2 must stick on real files."""
+    """The journal_mode PRAGMA must stick on real files."""
     s = Store.open(tmp_path / "wal.db", use_keychain=False)
     try:
         mode = s.conn.execute("PRAGMA journal_mode").fetchone()[0].lower()

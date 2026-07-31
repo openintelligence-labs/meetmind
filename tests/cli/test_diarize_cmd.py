@@ -79,8 +79,7 @@ def test_diarize_updates_speaker_ids_with_persisted_audio(tmp_path: Path, monkey
         row = s.conn.execute(
             "SELECT speaker_id FROM transcript_segments WHERE meeting_id = ?", (m.id,)
         ).fetchone()
-    # Mock diarizer assigns "A" or "B" — we don't care which, only that
-    # it's been written (was None before).
+    # The mock diarizer assigns "A" or "B"; only that one was written matters.
     assert row["speaker_id"] in {"A", "B", "unknown"}
 
 

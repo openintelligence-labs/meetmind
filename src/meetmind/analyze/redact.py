@@ -1,20 +1,7 @@
-"""Redaction profiles for transcripts (S11.9).
+"""Regex redaction profiles for transcripts.
 
-Three named profiles aligned to the architecture's data-sharing tiers:
-
-  * ``raw`` — no redaction. Everything passes through.
-  * ``team_internal`` — strip emails, phone numbers, and obvious credit
-    cards. Preserve names (your team needs them for context).
-  * ``public_share`` — strip everything in ``team_internal`` plus
-    person names (best-effort regex baseline; presidio path is opt-in
-    behind the optional `[redact]` extra for higher recall).
-
-The pure-Python path uses regexes only — fast, predictable, no model
-download. The presidio path swaps in the Microsoft Presidio analyzer +
-anonymizer when installed.
-
-Module is in ``analyze`` (text-only); architecture contract forbids it
-from touching ``capture`` / ``api``.
+``raw`` passes text through, ``team_internal`` strips emails/phones/cards but
+keeps names, and ``public_share`` also strips person names.
 """
 
 from __future__ import annotations
@@ -38,9 +25,7 @@ _EMAIL = re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")
 _PHONE = re.compile(r"\+?\d[\d\s().-]{7,}\d")
 # 13–19 digit groups with optional dashes/spaces, anchored on word boundaries.
 _CREDIT = re.compile(r"\b(?:\d[ -]?){13,19}\b")
-# Person-name heuristic: 2+ capitalized tokens. Conservative — will
-# miss lowercase names; that's fine for the public-share tier (we
-# err on the side of redacting more, not less).
+# Person-name heuristic: 2+ capitalized tokens. Misses lowercase names.
 _NAME = re.compile(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b")
 
 
@@ -54,8 +39,8 @@ def redact(text: str, *, profile: ProfileName = "team_internal") -> RedactionRes
 
     out, c = _EMAIL.subn("[email]", out)
     n += c
-    # Card before phone — both match long digit runs; card is more specific
-    # (13–19 digits) so we strip it first and let phone catch the rest.
+    # Card must run before phone: both match long digit runs, and the more
+    # specific card pattern (13-19 digits) has to claim its matches first.
     out, c = _CREDIT.subn("[card]", out)
     n += c
     out, c = _PHONE.subn("[phone]", out)

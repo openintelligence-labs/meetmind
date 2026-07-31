@@ -1,14 +1,9 @@
-"""Obsidian integration.
+"""Obsidian integration: writes a Markdown note per meeting into the vault.
 
-Filesystem-only — writes a Markdown note per meeting into the user's
-Obsidian vault. No OAuth, no plugin install, no Obsidian process needed.
+Filesystem-only, with Dataview-compatible YAML frontmatter.
 
-YAML frontmatter is Dataview-compatible so users can build tables of
-meetings, action items, decisions in their existing dashboards.
-
-Module is a leaf per the import-linter contract: integrations don't
-depend on api/, capture/, stt/, diarize/, or analyze/ — only on
-memory + models (via structural typing).
+Module is a leaf per the import-linter contract: memory and models only,
+via structural typing.
 """
 
 from __future__ import annotations
@@ -24,11 +19,8 @@ from meetmind.models import ActionItem, Decision, Meeting, TranscriptSegment
 class _StoreLike(Protocol):
     """Minimal store shape this module needs.
 
-    Defined inline so ``integrations`` doesn't import ``memory`` (the
-    architecture forbids the dep — integrations is a leaf). The CLI
-    layer passes a real ``Store`` in; tests pass a real ``Store`` too.
-    Structural typing (PEP 544) keeps the type-checker happy without
-    a hard dep edge.
+    Declared inline so ``integrations`` stays a leaf and never imports
+    ``memory``; callers pass a real ``Store``.
     """
 
     def get_meeting(self, meeting_id: str) -> Meeting | None: ...

@@ -1,16 +1,11 @@
-"""S15.4 — verify no MeetMind code path opens a non-loopback socket
-under the default (local-Ollama) configuration.
+"""Guarantee that no code path opens a non-loopback socket under the default
+local configuration. If a default install ever silently phones home, these
+tests fail.
 
-This is the load-bearing test for the privacy story: if a default
-install ever silently phones home, this test fails. Hosted-LLM users
-opt in by setting `MEETMIND_LLM_PROVIDER` to a remote provider — at
-that point the test is irrelevant and is skipped.
-
-Approach: monkey-patch ``socket.socket.connect`` and
-``socket.socket.connect_ex`` to refuse any non-loopback target, then
-exercise the API server + the analyze pipeline. The list of allowed
-hosts is intentionally narrow — `127.0.0.1`, `::1`, `localhost`. Any
-DNS lookup or non-loopback connect raises and the test fails loudly.
+``socket.socket.connect`` and ``connect_ex`` are patched to refuse any target
+outside a deliberately narrow allow-list, then the API server and analyze
+pipeline are exercised against them. Configuring a hosted LLM provider is an
+explicit opt-in to egress, so these tests skip in that case.
 """
 
 from __future__ import annotations
@@ -24,8 +19,7 @@ import pytest
 
 from meetmind.analyze.llm import llm_config_summary
 
-# UNIX-domain socket families don't carry an inet host; we let those
-# pass through (they're in-process or to a local daemon).
+# Non-inet families carry no host to check and are let through.
 _INET_FAMILIES = {socket.AF_INET, socket.AF_INET6}
 _LOCALHOST_HOSTS = {"127.0.0.1", "::1", "localhost", "0.0.0.0"}
 
@@ -66,8 +60,8 @@ def block_outbound_sockets():
 
     def _guarded_getaddrinfo(host, *args, **kwargs):
         if isinstance(host, str) and host not in _LOCALHOST_HOSTS and not host.startswith("127."):
-            # We allow it (resolution alone isn't egress) but record so a
-            # caller can see we hit DNS unexpectedly.
+            # Resolution alone isn't egress, so it is allowed through; this
+            # branch exists so a caller can hook unexpected DNS lookups.
             pass
         return real_getaddrinfo(host, *args, **kwargs)
 
@@ -104,8 +98,7 @@ def test_serve_does_not_open_outbound_sockets(tmp_path):
     app = create_app("tok-1234", bus=EventBus())
 
     with block_outbound_sockets():
-        # Pick a port and run the server briefly. No requests issued —
-        # we're just verifying that boot itself doesn't egress.
+        # No requests are issued; this checks that boot alone does not egress.
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             port = s.getsockname()[1]
@@ -134,13 +127,12 @@ def test_serve_does_not_open_outbound_sockets(tmp_path):
 def test_status_command_does_not_open_outbound_sockets():
     """`meetmind status` introspects only — it should not phone home.
 
-    list_local_models() *will* probe the local Ollama URL but that's
-    127.0.0.1 by default, so it stays inside the loopback allow-list.
+    list_local_models() does probe the Ollama URL, which stays inside the
+    loopback allow-list.
     """
     from meetmind.analyze.llm import list_local_models
 
-    # Force a known-local base URL so the test passes whether or not
-    # the user has overridden it via env.
+    # Pin the base URL so an env override cannot change what is exercised.
     old = os.environ.get("MEETMIND_LLM_BASE_URL")
     os.environ["MEETMIND_LLM_BASE_URL"] = "http://127.0.0.1:11434"
     try:

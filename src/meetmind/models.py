@@ -25,12 +25,8 @@ def _new_ulid() -> str:
 
 
 class ChannelKind(StrEnum):
-    """Source channel of a captured audio segment.
-
-    Mic = "self"; loopback = "remote(s)". Kept distinct end-to-end —
-    the channel split is the single biggest accuracy lever in the
-    diarization pipeline.
-    """
+    """Source channel of a captured audio segment: mic is "self", loopback is
+    "remote(s)". Kept distinct end-to-end as a diarization prior."""
 
     MIC = "mic"
     LOOPBACK = "loopback"
@@ -42,7 +38,7 @@ class MeetingTemplate(StrEnum):
     SALES_DISCOVERY = "sales_discovery"
     BRAINSTORM = "brainstorm"
     GENERIC = "generic"
-    ASSIST = "assist"  # v1.1 — assist-mode sessions, when --archive is set
+    ASSIST = "assist"  # assist-mode sessions, when --archive is set
 
 
 class TranscriptSegment(BaseModel):
@@ -59,7 +55,6 @@ class TranscriptSegment(BaseModel):
     speaker: str | None = None
     text: str
 
-    # New in v0.4 — additive only.
     channel: ChannelKind | None = None
     speaker_id: str | None = None
     confidence: float | None = None
@@ -91,17 +86,15 @@ class Transcript(BaseModel):
 class ActionItem(BaseModel):
     """An extracted commitment from a meeting.
 
-    `evidence_quote` (v0.4+) is the verbatim substring from the source
-    transcript that justified extraction. Substring-validation against
-    the source segment kills ~80% of hallucinated closures (architecture
-    §5.4).
+    `evidence_quote` is the verbatim transcript substring that justified the
+    extraction; validating it against the source segment is what filters out
+    hallucinated closures.
     """
 
     description: str
     owner: str | None = None
     due: str | None = None
 
-    # New in v0.4 — additive only.
     id: str = Field(default_factory=_new_ulid)
     source_segment_id: int | None = None
     evidence_quote: str | None = None
@@ -173,13 +166,9 @@ class ConsentEvent(BaseModel):
 class Meeting(BaseModel):
     """A single recording session.
 
-    `template = ASSIST` marks an opt-in archived assist-mode session
-    (v1.1). The `audio_path_*` fields point to encrypted Ogg-Opus files;
-    decrypted content never touches disk outside the SQLCipher-protected
-    directory.
-
-    `transcript_hash` + `signature` enable the "legal-mode signed
-    transcript bundle" export feature.
+    The `audio_path_*` fields point to encrypted Ogg-Opus files; decrypted
+    content never touches disk outside the SQLCipher-protected directory.
+    `transcript_hash` and `signature` back the signed-bundle export.
     """
 
     id: str = Field(default_factory=_new_ulid)

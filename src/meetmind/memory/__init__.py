@@ -1,7 +1,4 @@
-"""Persistent storage.
+"""Persistent storage: SQLCipher archive plus an embedded LanceDB index.
 
-SQLCipher AES-256 + LanceDB embedded. Per-DB DEK wrapped by OS keychain.
-Hybrid search: BM25 + dense → RRF(k=60) + optional ColBERT rerank.
-
-Module boundary: only this package opens SQLCipher connections.
+Only this package opens database connections.
 """

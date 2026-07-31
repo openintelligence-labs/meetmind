@@ -1,15 +1,10 @@
-"""Lightweight i18n scaffolding (S15.5).
+"""Lightweight i18n scaffolding for ``en`` (default), ``de`` and ``fr``.
 
-Three locales: ``en`` (default), ``de``, ``fr``. Strings stored as
-nested dicts in per-locale modules. The lookup is a simple chain:
-requested locale → English fallback → key itself.
+Strings live as nested dicts in per-locale modules; lookup falls back from
+the requested locale to English to the key itself. Plain dicts rather than
+gettext, since this is a handful of CLI strings and needs no .mo shipping.
 
-Why not gettext? gettext shines when shipping mo files in a wheel; for
-our use (a handful of CLI strings + a few UI hints) plain dicts are
-simpler, faster, and Python-import-time validated.
-
-Active locale is read from ``MEETMIND_LOCALE`` env var, with the system
-LC_ALL/LANG as fallback.
+The active locale comes from ``MEETMIND_LOCALE``, else ``LC_ALL``/``LANG``.
 """
 
 from __future__ import annotations

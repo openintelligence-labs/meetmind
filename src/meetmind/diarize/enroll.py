@@ -1,30 +1,7 @@
-"""Voiceprint enrollment + consent flow.
+"""Voiceprint enrollment, revocation and deletion, with a signed consent log.
 
-GDPR/BIPA/CUBI rules require:
-  • **Explicit, written consent** per speaker before storing any
-    voiceprint (biometric special-category data).
-  • An immutable **audit log** of every enrollment / revocation /
-    deletion, signed with a key the user controls.
-  • A **deletion cascade** that removes the centroid + ring buffer +
-    related segments' speaker_id pointers, while **retaining** the
-    consent log itself for accountability.
-
-This module orchestrates the workflow:
-
-    enroll(name, embedding, store, identity, disclosure_version=…)
-        → Speaker (with centroid populated) and a signed ConsentEvent
-
-    revoke(speaker_id, store, identity, …)
-        → flips Speaker centroid → None and writes a `revoke` ConsentEvent.
-        Re-enrollment requires a fresh consent capture.
-
-    forget(speaker_id, store, identity, …)
-        → cascading delete of the speaker row + downstream attribution
-        in transcript_segments. Consent log is retained.
-
-The actual UX (CLI prompt today, Tauri modal later) is in `cli.py`.
-This module is pure logic and has no I/O beyond the store + identity
-parameters that the caller supplies.
+Pure logic: all I/O goes through the ``store`` and ``identity`` the caller
+supplies. Consent capture UX lives in ``cli.py``.
 """
 
 from __future__ import annotations
@@ -43,9 +20,8 @@ from meetmind.diarize.matcher import Matcher
 from meetmind.models import ConsentEvent, Speaker
 
 
-# Structural typing for the bits of `meetmind.memory.store.Store` we
-# need. Keeps `diarize/` from importing `memory/` (the import-linter
-# contract forbids it); the CLI passes the concrete Store at call time.
+# Structural typing keeps `diarize/` from importing `memory/`, which the
+# import-linter contract forbids; the CLI passes the concrete Store at runtime.
 class _StoreLike(Protocol):
     def get_speaker(self, speaker_id: str) -> Speaker | None: ...
     def upsert_speaker(self, sp: Speaker) -> None: ...
@@ -53,18 +29,15 @@ class _StoreLike(Protocol):
     def forget_speaker(self, speaker_id: str) -> None: ...
 
 
-# Each enrollment-flow change bumps this. The disclosure text shown to
-# the user, the data we store, or the retention default — any of those
-# changes flips the version. ConsentEvent rows record the version that
-# was current at enrollment time so we can prove what the user agreed
-# to even if we later evolve the policy.
+# Changing the disclosure text, the data stored, or the retention default
+# requires a NEW version string here. ConsentEvent rows record the version
+# current at enrollment time, which is what proves what a user agreed to
+# after the policy later evolves.
 CURRENT_DISCLOSURE_VERSION = "2026-05-v1"
 
 
-# Default retention windows, picked to satisfy the strictest of BIPA /
-# CUBI / MHMDA: BIPA requires destruction within 3 years of last
-# interaction; CUBI within 1 year of "purpose served". 1 year matches
-# both.
+# Satisfies the strictest of BIPA (destroy within 3 years of last
+# interaction) and CUBI (within 1 year of "purpose served").
 DEFAULT_RETENTION_DAYS = 365
 
 
@@ -81,12 +54,7 @@ def _consent_payload(
     disclosure_version: str,
     ts: datetime,
 ) -> bytes:
-    """Canonical bytes signed by the install identity for this event.
-
-    The signature commits to (action, actor_speaker_id, version, ts).
-    Anyone with the install's public key can verify the audit log
-    wasn't tampered with after the fact.
-    """
+    """Canonical bytes signed by the install identity for this event."""
     return canonical_json(
         {
             "action": action,
@@ -135,11 +103,6 @@ def verify_consent_event(
         ts=event.ts,
     )
     return identity.verify(event.signature, payload)
-
-
-# ---------------------------------------------------------------------------
-# Enroll
-# ---------------------------------------------------------------------------
 
 
 def enroll(
@@ -193,11 +156,10 @@ def revoke(
     identity: Identity,
     disclosure_version: str = CURRENT_DISCLOSURE_VERSION,
 ) -> ConsentEvent:
-    """Revoke consent for ``speaker_id`` (clears centroid + ring).
+    """Revoke consent for ``speaker_id``, clearing its centroid and ring.
 
-    The Speaker row stays in place — segment attributions remain valid
-    historically — but the voiceprint can no longer be used for
-    future identification. Re-enrollment requires fresh consent.
+    The Speaker row stays so historical segment attributions remain valid.
+    Re-enrollment requires fresh consent.
     """
     sp = store.get_speaker(speaker_id)
     if sp is None:
@@ -234,11 +196,8 @@ def forget(
 ) -> ConsentEvent:
     """Permanently delete a speaker.
 
-    Cascades:
-      • DELETE FROM speakers (FK ON DELETE SET NULL on transcript_segments
-        keeps the segments but nulls the speaker_id).
-      • The consent log is **retained** — auditors need to see that the
-        deletion happened, including its signed timestamp.
+    Transcript segments survive with a null speaker_id (FK ON DELETE SET
+    NULL). The consent log is retained so auditors can see the deletion.
     """
     sp = store.get_speaker(speaker_id)
     if sp is None:
@@ -265,8 +224,7 @@ def export_event(
 ) -> ConsentEvent:
     """Log that a voiceprint export was performed for ``speaker_id``.
 
-    Voiceprint export is opt-in and audit-logged: the consent event is
-    signed and retained even after the speaker row is deleted.
+    The signed event is retained even after the speaker row is deleted.
     """
     now = datetime.now(UTC)
     event = _sign_event(
@@ -278,11 +236,6 @@ def export_event(
     )
     store.append_consent_event(event)
     return event
-
-
-# ---------------------------------------------------------------------------
-# Disclosure text
-# ---------------------------------------------------------------------------
 
 
 DISCLOSURE_TEXT = {
@@ -313,7 +266,6 @@ def _new_speaker_id() -> str:
     return str(ULID())
 
 
-# Re-export for callers that prefer a single import.
 __all__ = [
     "CURRENT_DISCLOSURE_VERSION",
     "DEFAULT_RETENTION_DAYS",
@@ -325,9 +277,6 @@ __all__ = [
     "revoke",
     "verify_consent_event",
 ]
-
-
-# Tiny helper for `meetmind speakers` / dump / debug — JSON-able view.
 
 
 def speaker_to_summary(speaker: Speaker) -> dict:
@@ -356,10 +305,6 @@ def consent_event_to_summary(event: ConsentEvent) -> dict:
     }
 
 
-# Compatibility — sometimes callers want the raw signature payload as JSON
-# bytes for offline auditing.
-
-
 def signing_payload_for(event: ConsentEvent) -> bytes:
     return _consent_payload(
         actor_speaker_id=event.actor_speaker_id,
@@ -369,8 +314,7 @@ def signing_payload_for(event: ConsentEvent) -> bytes:
     )
 
 
-# Re-export json for callers that want to dump consent events directly.
 __all__ += ["consent_event_to_summary", "signing_payload_for", "speaker_to_summary"]
 
 
-_ = json  # keep the import; consent payloads are canonicalized via crypto.canonicalize
+_ = json  # re-exported for callers; payloads themselves use crypto.canonicalize

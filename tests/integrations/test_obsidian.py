@@ -1,4 +1,4 @@
-"""Tests for the Obsidian integration (S11.7)."""
+"""Tests for the Obsidian integration."""
 
 from __future__ import annotations
 

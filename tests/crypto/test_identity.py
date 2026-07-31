@@ -47,9 +47,7 @@ def test_load_or_create_persists_to_keystore():
     store = InMemoryKeyStore()
     a = load_or_create_identity(store)
     b = load_or_create_identity(store)
-    # Same identity returned both times.
     assert a.fingerprint == b.fingerprint
-    # Persisted under expected service/key.
     assert store.get_password(KEYCHAIN_SERVICE, KEYCHAIN_KEY) is not None
 
 

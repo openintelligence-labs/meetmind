@@ -1,19 +1,14 @@
 """SQLCipher / SQLite schema (DDL only, no driver-specific code).
 
-Schema version is pinned in `SCHEMA_VERSION`. Migrations are applied by
-`apply_schema(conn)` which is idempotent — safe to call on every open.
-
-All identifiers use ULIDs from the data model. Foreign keys cascade on
-delete so `forget_speaker(speaker_id)` and `forget_meeting(meeting_id)`
-are single-row operations that wipe everything downstream.
+`apply_schema(conn)` applies this and is idempotent. Foreign keys cascade on
+delete, so `forget_meeting()` is a single-row operation.
 """
 
 from __future__ import annotations
 
 from typing import Final
 
-# Bumped on every additive change to SCHEMA_SQL. `MIGRATIONS` below carries
-# the per-version upgrade DDL applied by `apply_schema()` on an existing DB.
+# Bumped on every additive change to SCHEMA_SQL.
 SCHEMA_VERSION: Final[int] = 2
 
 
@@ -126,13 +121,9 @@ CREATE INDEX IF NOT EXISTS idx_meetings_started ON meetings(started_at DESC);
 """
 
 
-# Ordered migrations from (version - 1) → version. The runner picks up
-# any version greater than the stored `schema_meta.schema_version` and
-# applies them inside a single transaction. Migrations must be
-# idempotent (use IF NOT EXISTS / IF EXISTS) so a partial-apply
-# followed by a retry is safe.
+# Ordered migrations from (version - 1) → version, applied to any DB whose
+# stored `schema_meta.schema_version` is lower. Each must be idempotent
+# (IF NOT EXISTS / IF EXISTS) so a partial apply can be safely retried.
 MIGRATIONS: Final[dict[int, str]] = {
-    # 1→2: add idx_meetings_started. Already created by SCHEMA_SQL on
-    # fresh DBs but harmless to re-run on existing DBs via IF NOT EXISTS.
     2: "CREATE INDEX IF NOT EXISTS idx_meetings_started ON meetings(started_at DESC);",
 }

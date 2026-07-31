@@ -208,11 +208,8 @@ async def test_jsonrpc_parse_error(ctx: StoreContext):
     assert obj["error"]["code"] == -32700
 
 
-# ─────────────────── de-stubbed tools (v0.21) ───────────────────
-
-
 async def test_get_decisions_without_meeting_id_returns_cross_meeting(ctx: StoreContext):
-    """Was a stub; should return up to `limit` recent decisions across meetings."""
+    """Returns up to `limit` recent decisions across meetings."""
     out = await call_tool(ctx, "get_decisions", {})
     assert "warning" not in out, out
     assert isinstance(out["decisions"], list)

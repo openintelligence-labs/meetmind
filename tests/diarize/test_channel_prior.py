@@ -40,8 +40,8 @@ def test_override_keeps_remote_when_loopback_dominant():
 
 
 def test_override_flips_to_self_when_mic_dominates_loopback_segment():
-    """The capture sidecar mis-attributed mic energy as loopback. Override
-    rescues us. This is the documented free-30% accuracy lever."""
+    """A segment the sidecar mis-attributed to loopback is flipped back to
+    self when the mic channel dominates."""
     mic = [0.05] * 30  # loud
     loop = [0.005] * 30  # quiet → mic is ~20 dB louder
     seg = _seg(StreamId.LOOPBACK, cluster="A")
@@ -102,5 +102,5 @@ def test_synthetic_30pct_accuracy_lift():
         if out.cluster_id == expected:
             correct += 1
 
-    # Documented "free 30%" floor — we want 9 or 10 right.
+    # Accuracy floor for this fixture: at least 9 of 10.
     assert correct >= 9, f"channel-prior accuracy {correct}/{total}"

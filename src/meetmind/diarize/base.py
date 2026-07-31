@@ -1,15 +1,7 @@
-"""Diarization base types + protocol.
+"""Diarization base types and backend protocol.
 
-Diarization output is intentionally minimal: just `(start_ms, end_ms,
-cluster_id, confidence, channel)` tuples. Identity resolution (cluster
-→ Speaker) is a separate step that lives in `diarize/voiceprint.py`.
-
-Cluster IDs are opaque strings — usually short identifiers like "A",
-"B", "remote-2". The pipeline downstream treats them as labels.
-
-`channel` is the originating capture stream. The channel-prior gate
-overrides cluster IDs to "self" / "remote" when the mic vs loopback
-split makes the answer trivial.
+Output is deliberately minimal: spans with an opaque cluster id. Resolving a
+cluster to a `Speaker` is a separate step in `diarize/voiceprint.py`.
 """
 
 from __future__ import annotations
@@ -42,11 +34,9 @@ class DiarSegment:
 class DiarBackend(Protocol):
     """Streaming diarizer.
 
-    Consumes per-frame audio (with stream + start_ms metadata) and emits
-    `DiarSegment`s. Segments may be revised — implementations are free
-    to emit overlapping segments and rely on the stitcher to reconcile,
-    or to emit only finalized segments. The mock + production
-    Sortformer adapter both emit only finalized.
+    Consumes per-frame audio with stream and start_ms metadata, emitting
+    `DiarSegment`s. Implementations may emit overlapping segments and let the
+    stitcher reconcile them, or emit only finalized ones.
     """
 
     name: str

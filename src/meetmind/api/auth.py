@@ -1,14 +1,10 @@
 """Local API auth: ephemeral per-launch bearer token.
 
-The token is a 256-bit random URL-safe string written to
-`~/.meetmind/token` with mode 0600 at server start. Every request to the
-local API must carry it as `Authorization: Bearer <token>`. The token
-is rotated on every server restart — there's no persistence beyond the
-running process.
-
-Why not a Unix domain socket? Browsers and Tauri WebViews can't connect
-to UDS over `fetch`/`EventSource` cleanly. 127.0.0.1 + ephemeral bearer
-matches the precedent set by Ollama, LM Studio, and Linear desktop.
+A 256-bit URL-safe token is written to `~/.meetmind/token` (mode 0600) at
+server start and rotated on every restart. Requests carry it as
+`Authorization: Bearer <token>`. A Unix domain socket would avoid the file
+entirely, but browsers and Tauri WebViews cannot reach UDS from
+`fetch`/`EventSource`.
 """
 
 from __future__ import annotations
@@ -32,7 +28,7 @@ def _restrict_windows_acl(target: Path) -> None:
     """Restrict `target` to the current user via an owner-only DACL.
 
     ``os.chmod(0o600)`` is a no-op for access control on Windows (files
-    report 0666 regardless), so we shell out to ``icacls`` twice:
+    report 0666 regardless), so this shells out to ``icacls`` twice:
 
       * ``/reset`` first replaces the whole ACL with the inherited
         defaults — this clears any *explicit* ACE a previous writer may
@@ -42,8 +38,8 @@ def _restrict_windows_acl(target: Path) -> None:
         BUILTIN\\Users, ...), and ``/grant:r <user>:F`` leaves a single
         full-control ACE for the current user.
 
-    On failure we delete the token file and raise — a world-readable
-    bearer token is strictly worse than no token at all.
+    On failure the token file is deleted and the error re-raised: a
+    world-readable bearer token is worse than no token at all.
     """
     user = getpass.getuser()
     try:
@@ -72,19 +68,12 @@ def generate_token() -> str:
 
 
 def write_token(token: str, path: Path | None = None) -> Path:
-    """Persist `token` to disk with mode 0600. Default path is `token_path()`.
+    """Persist `token` to disk with mode 0600, defaulting to `token_path()`.
 
-    Two failure modes we close:
-      • Created-as-0600 window: ``O_CREAT|...|0o600`` makes the file
-        unreadable from the moment of creation.
-      • Pre-existing-with-loose-perms: ``os.open`` honors the mode bits
-        ONLY when creating. If the file already existed (e.g. user ran
-        an older build), ``O_TRUNC`` truncates but leaves perms alone.
-        We follow up with an explicit ``chmod(0o600)`` and assert it.
-
-    On Windows the mode bits are meaningless for access control, so we
-    additionally apply an owner-only DACL via ``icacls`` (see
-    :func:`_restrict_windows_acl`).
+    ``os.open`` applies the mode only when it creates the file, so a
+    pre-existing token file keeps its old (possibly loose) permissions; the
+    explicit ``chmod`` below closes that gap. On Windows mode bits do not
+    control access, so an owner-only DACL is applied as well.
     """
     target = path or token_path()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -93,13 +82,9 @@ def write_token(token: str, path: Path | None = None) -> Path:
         os.write(fd, token.encode("ascii"))
     finally:
         os.close(fd)
-    # Belt + suspenders: chmod even on Windows (no-op on the perms but
-    # consistent with the contract). On POSIX this is the line that
-    # actually closes the pre-existing-loose-perms gap.
+    # Closes the pre-existing-loose-perms gap on POSIX.
     os.chmod(str(target), 0o600)
     if sys.platform == "win32":
-        # chmod does nothing for Windows access control; apply an
-        # owner-only DACL so the token matches the POSIX 0600 posture.
         _restrict_windows_acl(target)
     return target
 
@@ -114,14 +99,7 @@ def read_token(path: Path | None = None) -> str | None:
 
 
 class BearerAuth:
-    """FastAPI-compatible bearer-token verifier.
-
-    Constructed at app startup with the active token. Use as a dependency:
-
-        auth = BearerAuth(token)
-        @app.get("/protected", dependencies=[Depends(auth)])
-        async def protected(): ...
-    """
+    """FastAPI dependency that verifies the bearer token."""
 
     def __init__(self, token: str) -> None:
         self._token = token

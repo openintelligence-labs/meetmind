@@ -1,19 +1,8 @@
-"""MCP 2025-11 stdio server for MeetMind.
+"""MCP stdio server: JSON-RPC 2.0 over newline-delimited stdin/stdout.
 
-Exposes the canonical 15-tool surface backed by the SQLCipher store +
-LanceDB hybrid index.
-
-Wire format: JSON-RPC 2.0 over newline-delimited stdio. Two methods are
-supported:
-
-  • `tools/list`  — returns the catalog (name, description, input schema)
-  • `tools/call`  — executes a tool, returns a structured result
-
-Streamable HTTP transport is a planned addition.
-
-Each tool is a pure function `(StoreContext, args) -> dict`. Adding a
-new tool = appending to `_TOOL_TABLE`. Tests exercise tools individually
-without spinning up the JSON-RPC loop.
+Tools are backed by the SQLCipher store and the LanceDB hybrid index. Each is
+an async function `(StoreContext, args) -> dict` registered in `_TOOL_TABLE`,
+so tools can be exercised without running the JSON-RPC loop.
 """
 
 from __future__ import annotations
@@ -51,11 +40,6 @@ class ToolDescriptor:
     description: str
     input_schema: dict[str, Any]
     fn: ToolFn
-
-
-# ---------------------------------------------------------------------------
-# Tool implementations
-# ---------------------------------------------------------------------------
 
 
 async def _search_meetings(ctx: StoreContext, args: dict[str, Any]) -> dict[str, Any]:
@@ -145,12 +129,9 @@ async def _get_decisions(ctx: StoreContext, args: dict[str, Any]) -> dict[str, A
 
 
 async def _find_unanswered_questions(ctx: StoreContext, args: dict[str, Any]) -> dict[str, Any]:
-    """Heuristic: segments ending in `?` with no later same-meeting segment
-    that directly references them within ``window_ms``.
+    """Return question segments with no reply from another speaker in ``window_ms``.
 
-    This is a substring-cheap pass — it's deliberately not the live coach
-    loop, which uses an LLM. Returns segments suitable for the MCP client
-    to surface as "open questions" alongside `next_steps`.
+    Purely heuristic (no LLM), so callers should treat the result as candidates.
     """
     mid = args.get("meeting_id")
     if not mid:
@@ -162,7 +143,6 @@ async def _find_unanswered_questions(ctx: StoreContext, args: dict[str, Any]) ->
         text = (s.text or "").strip()
         if not text.endswith("?") or len(text) < 8:
             continue
-        # Look at follow-on segments within window_ms by a different speaker.
         speaker_key = s.speaker_id or s.speaker
         cutoff = int(s.end_seconds * 1000) + window_ms
         answered = False
@@ -204,16 +184,14 @@ async def _get_speaker_history(ctx: StoreContext, args: dict[str, Any]) -> dict[
 
 
 async def _summarize_period(ctx: StoreContext, args: dict[str, Any]) -> dict[str, Any]:
-    """Aggregate persisted summaries across a date window.
+    """Aggregate already-persisted summaries and decisions across a date window.
 
-    Doesn't re-invoke the LLM — that's an expensive, opinionated choice
-    we leave to the user. Instead pulls the per-meeting TL;DRs and
-    decisions already stamped on disk and returns a digest-ready blob.
+    Never re-invokes the LLM; only stored per-meeting TL;DRs are returned.
     """
     from datetime import datetime as _dt  # noqa: PLC0415
 
-    start = args.get("start")  # ISO date string, inclusive
-    end = args.get("end")  # ISO date string, exclusive
+    start = args.get("start")  # ISO date, inclusive
+    end = args.get("end")  # ISO date, exclusive
     meetings = ctx.store.list_meetings(limit=int(args.get("limit", 200)))
 
     def _in_window(m_started: Any) -> bool:
@@ -321,16 +299,9 @@ async def _get_followups(ctx: StoreContext, args: dict[str, Any]) -> dict[str, A
 
 
 async def _export_to(ctx: StoreContext, args: dict[str, Any]) -> dict[str, Any]:
-    """Dispatch to a shipped integration exporter.
+    """Dispatch to an integration exporter: obsidian, github, or slack.
 
-    Supported targets:
-      • ``obsidian`` — writes a Markdown note (filesystem; no auth).
-      • ``github``   — opens a GitHub issue via ``gh`` CLI.
-      • ``slack``    — posts a Block Kit summary to ``SLACK_WEBHOOK_URL``.
-
-    OAuth-bound targets (Notion, Linear) are not implemented here; the
-    tool returns a structured error pointing the caller at the
-    integration's env-var unblock step.
+    Unsupported targets return a structured error rather than raising.
     """
     target = (args.get("target") or "").strip().lower()
     meeting_id = args.get("meeting_id")
@@ -377,10 +348,8 @@ async def _export_to(ctx: StoreContext, args: dict[str, Any]) -> dict[str, Any]:
 async def _start_recording(_ctx: StoreContext, args: dict[str, Any]) -> dict[str, Any]:
     """Start a recording via the in-process HTTP recording session.
 
-    The MCP server shares a process with the HTTP API in the standard
-    `meetmind serve` topology, so we can drive the session helper
-    directly. When the MCP server runs standalone (no HTTP API), this
-    returns a structured error pointing the caller to `meetmind serve`.
+    Under `meetmind serve` the MCP server shares a process with the HTTP API,
+    so the session helper is called directly; standalone, this returns an error.
     """
     try:
         from meetmind.api.http import _start_recording_session  # noqa: PLC0415
@@ -405,11 +374,6 @@ async def _stop_recording(_ctx: StoreContext, _args: dict[str, Any]) -> dict[str
     except Exception as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True, **result}
-
-
-# ---------------------------------------------------------------------------
-# Tool catalog
-# ---------------------------------------------------------------------------
 
 
 def _str_schema(props: dict[str, str], required: list[str] | None = None) -> dict[str, Any]:
@@ -559,11 +523,6 @@ async def call_tool(ctx: StoreContext, name: str, args: dict[str, Any]) -> dict[
     return await tool.fn(ctx, args)
 
 
-# ---------------------------------------------------------------------------
-# JSON-RPC 2.0 over stdio
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class JsonRpcServer:
     ctx: StoreContext
@@ -669,11 +628,6 @@ def _rpc_result(rpc_id: Any, result: Any) -> str:
 
 def _rpc_error(rpc_id: Any, code: int, message: str) -> str:
     return json.dumps({"jsonrpc": "2.0", "id": rpc_id, "error": {"code": code, "message": message}})
-
-
-# ---------------------------------------------------------------------------
-# Adapters: model → JSON
-# ---------------------------------------------------------------------------
 
 
 def _meeting_to_dict(m: Any) -> dict[str, Any]:

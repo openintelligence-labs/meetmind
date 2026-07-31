@@ -1,22 +1,8 @@
 """Decision extraction with the same substring guard as `actions.py`.
 
-A "decision" is an explicit choice made in a meeting, with optional
-rationale and dissenters. Mirrors the action-item extraction shape so
-the analyze package has one consistent prompting + validation pattern.
-
-Output schema (LLM-facing):
-
-    { "decisions": [
-        { "decision": str,
-          "rationale": str|null,
-          "dissenters": [str],
-          "evidence_quote": str } ] }
-
-Validation:
-  - `evidence_quote` must be a verbatim substring of the transcript window.
-  - `decision` must be non-empty and ≤ 240 chars.
-  - `dissenters` is a list of speaker labels (cluster_ids or display
-    names); we store raw — voiceprint resolution is downstream.
+A decision is an explicit choice made in a meeting, with optional rationale
+and dissenters. Dissenter labels are stored raw; voiceprint resolution is
+downstream.
 """
 
 from __future__ import annotations
@@ -83,9 +69,7 @@ def extract_decisions(
 ) -> DecisionExtractionResult:
     """LLM extraction → validated `Decision` rows.
 
-    `source_segment_ids` is attached to each accepted Decision; in
-    practice the analyze pipeline calls this on a single sliding window
-    and passes that window's segment-id range.
+    `source_segment_ids` is attached to every accepted Decision.
     """
     prompt = SYSTEM_PROMPT + "\n" + build_user_prompt(transcript_window)
     raw = llm(prompt)
@@ -126,9 +110,6 @@ def _validate(item: ExtractedDecision, transcript_window: str) -> str | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Test helper — re-export `MockLLM` from actions to keep test imports tidy.
-# ---------------------------------------------------------------------------
 from meetmind.analyze.actions import MockLLM  # noqa: E402,F401  (re-exported)
 
 

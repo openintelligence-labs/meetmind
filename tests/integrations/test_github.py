@@ -1,7 +1,7 @@
-"""Tests for the GitHub Issues integration (S11.8).
+"""Tests for the GitHub Issues integration.
 
-We avoid touching the real ``gh`` binary by writing a tiny stub script
-to ``tmp_path`` and pointing the integration at it via ``gh_binary=``.
+The real ``gh`` binary is never invoked: a stub script in ``tmp_path`` is
+passed to the integration via ``gh_binary=``.
 """
 
 from __future__ import annotations

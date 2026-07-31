@@ -1,9 +1,7 @@
 """Tests for `meetmind selftest`.
 
-The selftest should be safe to run in any environment — no network,
-no real keychain. We verify exit codes + output shape, not the
-absolute pass/fail of every check (sidecar discovery, e.g., depends
-on the host).
+Asserts exit codes and output shape rather than the pass/fail of individual
+checks, several of which depend on the host.
 """
 
 from __future__ import annotations
@@ -33,7 +31,6 @@ def test_selftest_json_output_is_parseable() -> None:
     data = json.loads(result.output)
     assert isinstance(data, list) and data
     names = {c["name"] for c in data}
-    # Mandatory checks that should always be present.
     assert {
         "python",
         "storage",

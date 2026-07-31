@@ -1,9 +1,7 @@
-"""German strings — placeholder. Translation by a native speaker is TODO.
+"""German strings — placeholder scaffold.
 
-Keys absent here fall back to English via the lookup chain in
-``meetmind.i18n.t``. We ship the scaffold so we don't block on
-translations to claim DACH-region readiness, but every released
-binary should have a fully-translated German bundle before launch.
+TODO: needs review by a native speaker before release. Absent keys fall back
+to English via the lookup chain in ``meetmind.i18n.t``.
 """
 
 STRINGS = {

@@ -1,24 +1,15 @@
-"""Signed transcript bundle export + verification.
+"""Signed transcript bundle export and verification.
 
 A bundle is a tar.gz containing:
 
     transcript.json         — canonicalized meeting + segments + summary
     audio_mic.opus.enc      — encrypted Opus, optional
     audio_loopback.opus.enc — encrypted Opus, optional
-    model_versions.json     — {stt: ..., diar: ..., summary_llm: ..., bundle_format: 1}
-    public_key.pem          — exporter's Ed25519 public key (for offline verify)
+    model_versions.json     — model ids plus bundle_format
+    public_key.pem          — exporter's Ed25519 public key, for offline verify
     fingerprint.txt         — sha256(public_key) hex
     manifest.json           — hashes of all the above
     signature.bin           — Ed25519 over canonical(manifest)
-
-`meetmind verify` checks:
-    1. Bundle layout is well-formed.
-    2. Manifest hashes match the actual file contents.
-    3. Signature verifies against the embedded public key.
-    4. Fingerprint matches sha256(public_key.pem raw bytes).
-
-Verifiers can additionally pin the expected fingerprint out-of-band
-(e.g. for chain-of-custody) — `verify_bundle(..., expected_fingerprint=...)`.
 """
 
 from __future__ import annotations

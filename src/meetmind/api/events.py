@@ -1,15 +1,8 @@
-"""Event types for the local SSE bus.
+"""Event types shipped over `/v1/transcripts/live`.
 
-Anything that gets shipped over `/v1/transcripts/live` is one of these:
-
-  • `partial`   — incremental, revisable hypothesis (replace last line)
-  • `final`     — committed transcript span (append, never revise)
-  • `diar`      — speaker boundary (start_ms, end_ms, cluster_id)
-  • `speaker`   — fully-stitched speaker-attributed segment
-  • `meta`      — session lifecycle (started, stopped, error)
-
-Each event is a small Pydantic model serialized as JSON in the SSE
-`data:` field. The `event:` field carries the event kind.
+Each event is serialized as JSON in the SSE `data:` field, with the kind in
+the `event:` field. A `partial` revises the previous hypothesis; a `final` is
+committed and never revised.
 """
 
 from __future__ import annotations
@@ -67,10 +60,8 @@ class MetaEvent(BaseModel):
 class CoachTipEvent(BaseModel):
     """Live coaching suggestion from the rolling-window LLM.
 
-    Emitted by the optional coach loop (off by default, opt-in via
-    ``meetmind record --coach``). Tips reference a window of recent
-    transcript spans by ``window_start_ms`` / ``window_end_ms`` so the
-    overlay can highlight what the suggestion is grounded in.
+    ``window_start_ms`` / ``window_end_ms`` bound the transcript span the tip
+    is grounded in, so the overlay can highlight it.
     """
 
     kind: Literal["coach_tip"] = "coach_tip"
@@ -83,12 +74,10 @@ class CoachTipEvent(BaseModel):
 
 
 class SidecarEvent(BaseModel):
-    """Sidecar lifecycle event — covers mid-meeting deaths + restart attempts.
+    """Sidecar lifecycle event, including mid-meeting deaths and restarts.
 
-    The watchdog in ``cli._run_record`` publishes this so the UI can show
-    "recording interrupted" instead of going silent. ``returncode`` is
-    None for a still-running sidecar (start/ready); non-None means the
-    sidecar exited.
+    ``returncode`` is None while the sidecar is still running; non-None means
+    it exited.
     """
 
     kind: Literal["sidecar"] = "sidecar"

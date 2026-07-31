@@ -1,19 +1,8 @@
-"""Production embedder via `actants.Embeddings` → Ollama nomic-embed-text v2.
+"""Embedder via `actants.Embeddings`, defaulting to Ollama nomic-embed-text.
 
-Default model: `nomic-embed-text v2` (137M MoE, 768-dim, Apache-2.0).
-The Ollama image is `nomic-embed-text:latest`.
-
-`make_embedder(model_name)` returns an `Embedder`-shape callable
-(`Callable[[str], list[float]]`) compatible with
-`meetmind.memory.vector.HybridIndex`.
-
-The first `embed()` call probes the model's vector dimension and caches
-it on the embedder instance. Callers can read `.dim` to size the
-LanceDB table accordingly:
-
-    embedder = make_embedder("nomic-embed-text")
-    dim = probe_embedder_dim(embedder)
-    index = HybridIndex.open(path, vector_dim=dim, embedder=embedder)
+`make_embedder()` returns a `Callable[[str], list[float]]` compatible with
+`meetmind.memory.vector.HybridIndex`; use `probe_embedder_dim()` to size the
+LanceDB table.
 """
 
 from __future__ import annotations
@@ -47,15 +36,14 @@ def get_default_embeddings(model: str | None = None) -> Any:
 def make_embedder(model: str | None = None) -> Embedder:
     """Return a sync `Embedder` callable wrapping actants Embeddings.
 
-    The returned callable embeds one string at a time. Batch embedding
-    (much cheaper for index builds) lives in `embed_many`.
+    Embeds one string per call; see `embed_many` for lists.
     """
     embeddings = get_default_embeddings(model)
 
     def _call(text: str) -> list[float]:
         result = _run(embeddings.embed_one(text))
-        # actants returns an `EmbeddingResult` with .vector; fall back to
-        # treating the result itself as a list of floats if it duck-types.
+        # actants returns an `EmbeddingResult` with .vector; older shapes
+        # duck-type as a plain sequence of floats.
         vec = getattr(result, "vector", None) or getattr(result, "embedding", None)
         if vec is None and isinstance(result, list | tuple):
             vec = list(result)
@@ -67,9 +55,7 @@ def make_embedder(model: str | None = None) -> Embedder:
 
 
 def embed_many(model: str | None, texts: list[str]) -> list[list[float]]:
-    """Batch helper. One Ollama round-trip per text — actants currently
-    doesn't expose a true batch API, but reusing the connection keeps
-    overhead low. Future actants versions may add `embed_batch`."""
+    """Embed a list of texts. One round-trip per text; actants has no batch API."""
     embedder = make_embedder(model)
     return [embedder(t) for t in texts]
 
@@ -77,11 +63,6 @@ def embed_many(model: str | None, texts: list[str]) -> list[list[float]]:
 def probe_embedder_dim(embedder: Embedder, *, probe: str = "dimension probe") -> int:
     """Call the embedder once with a stable string to discover vector dim."""
     return len(embedder(probe))
-
-
-# ---------------------------------------------------------------------------
-# Async helpers (mirror analyze/llm.py)
-# ---------------------------------------------------------------------------
 
 
 def _run(coro: Any) -> Any:
@@ -93,8 +74,7 @@ def _run(coro: Any) -> Any:
 
 
 def _await_in_thread(coro: Any) -> Any:
-    """Fresh loop per call in a worker thread — see analyze/llm.py for
-    the rationale."""
+    """Run `coro` on a fresh loop in a worker thread (safe inside a running loop)."""
     import concurrent.futures
 
     def _runner() -> Any:

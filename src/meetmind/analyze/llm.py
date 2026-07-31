@@ -1,27 +1,8 @@
-"""Production LLM transport via `actants`.
+"""LLM transport via `actants`, local-by-default and BYO-LLM.
 
-MeetMind is **local-by-default** but **BYO-LLM**: ``actants`` already
-speaks Ollama, OpenAI, Anthropic, Gemini, Groq, and Mistral. We forward
-``MEETMIND_LLM_*`` env vars to the underlying ``ACTANTS_*`` settings so
-users get a single, branded knob set:
-
-  MEETMIND_LLM_PROVIDER   → ACTANTS_PROVIDER   (default: ollama)
-  MEETMIND_LLM_MODEL      → ACTANTS_MODEL      (also: actants default)
-  MEETMIND_LLM_BASE_URL   → ACTANTS_BASE_URL   (default: 127.0.0.1:11434)
-  MEETMIND_LLM_API_KEY    → ACTANTS_API_KEY    (only for hosted providers)
-
-Audio + transcripts never leave the device regardless of provider —
-only the *prompted* text does, and only if the user picks a hosted
-provider. Local Ollama remains the privacy-first default.
-
-`analyze.actions` and `analyze.decisions` are written against an
-LLMCallable contract: a callable taking a prompt and returning a JSON
-dict. In production we don't want a dict — we want a typed Pydantic
-model. `actants.LLM.extract(prompt, schema)` does exactly that, including
-one-shot self-repair when the first response doesn't parse.
-
-Module imports `actants` lazily so the optional dep stays optional in
-test runs that don't touch the LLM path.
+``MEETMIND_LLM_*`` env vars are forwarded to the underlying ``ACTANTS_*``
+settings so there is a single branded knob set. Imports `actants` lazily to
+keep the optional dependency optional.
 """
 
 from __future__ import annotations
@@ -42,9 +23,8 @@ T = TypeVar("T", bound=BaseModel)
 
 _DEFAULT_MODEL_ENV = "MEETMIND_LLM_MODEL"
 
-# MEETMIND_LLM_* → ACTANTS_* mapping. We forward on import so any
-# `actants.LLM()` constructed downstream picks them up via pydantic-
-# settings without us having to thread the values through.
+# Forwarded on import so any downstream `actants.LLM()` picks these up via
+# pydantic-settings, without threading the values through every call site.
 _ENV_FORWARD = {
     "MEETMIND_LLM_PROVIDER": "ACTANTS_PROVIDER",
     "MEETMIND_LLM_MODEL": "ACTANTS_MODEL",
@@ -56,8 +36,8 @@ _ENV_FORWARD = {
 def _forward_env() -> None:
     """Mirror MEETMIND_LLM_* env vars into the ACTANTS_* namespace.
 
-    User-set ACTANTS_* values win — we never overwrite. This lets power
-    users still use the actants-native names if they prefer.
+    Existing ACTANTS_* values are never overwritten, so the actants-native
+    names keep working.
     """
     for src, dst in _ENV_FORWARD.items():
         val = os.environ.get(src)
@@ -65,8 +45,6 @@ def _forward_env() -> None:
             os.environ[dst] = val
 
 
-# Forward on module import so the env config is in place by the time
-# anyone constructs an LLM. Idempotent and cheap.
 _forward_env()
 
 
@@ -77,7 +55,7 @@ def _resolve_model(model: str | None) -> str | None:
 
 
 def llm_config_summary() -> dict[str, str | None]:
-    """What provider/model/base_url will the next LLM use? For `meetmind status`."""
+    """Return the provider/model/base_url the next LLM will use."""
     return {
         "provider": os.environ.get("MEETMIND_LLM_PROVIDER")
         or os.environ.get("ACTANTS_PROVIDER")
@@ -93,16 +71,11 @@ def llm_config_summary() -> dict[str, str | None]:
 
 
 def get_default_llm() -> Any:
-    """Construct an `actants.LLM` with our defaults.
+    """Construct an `actants.LLM`, defaulting to local Ollama.
 
-    Defaults to local Ollama. Caller can override via env or by passing
-    a pre-built LLM in. Lazy-imports `actants` to keep it optional.
-
-    Resolution order:
-      1. ``MEETMIND_LLM_MODEL`` env var (explicit user choice).
-      2. ``best_available_local_model()`` — picks the best model that's
-         actually installed (gemma4 > gemma3 > qwen3 > qwen2.5 > …).
-      3. actants default — only hit when no local Ollama is reachable.
+    Model resolution: ``MEETMIND_LLM_MODEL``, then
+    ``best_available_local_model()``, then the actants default (reached only
+    when no local Ollama is available).
     """
     import actants  # noqa: PLC0415
 
@@ -130,9 +103,8 @@ def make_callable(
 ) -> Callable[[str], dict[str, Any]]:
     """Adapt an `actants.LLM` to the LLMCallable contract used by analyze.
 
-    `schema` lets the wrapper use `extract()` (typed) and emit a dict that
-    matches the analyze module's expectations. If `schema` is None, falls
-    back to `complete()` and the caller must JSON-decode the body.
+    With a `schema`, uses typed `extract()` and dumps the model to a dict.
+    Without one, falls back to `complete()` and the caller decodes the body.
     """
     llm = llm or get_default_llm()
     resolved_model = _resolve_model(model)
@@ -142,15 +114,9 @@ def make_callable(
             obj = _run(llm.extract(prompt, schema, model=resolved_model))
             return obj.model_dump(mode="python")
         result = _run(llm.complete(prompt, model=resolved_model))
-        # Caller must parse `result.content` themselves.
         return {"content": result.content}
 
     return _call
-
-
-# ---------------------------------------------------------------------------
-# Async helpers
-# ---------------------------------------------------------------------------
 
 
 _LLM_LOOP: asyncio.AbstractEventLoop | None = None
@@ -160,14 +126,10 @@ _LLM_LOOP_LOCK = threading.Lock()
 def _persistent_loop() -> asyncio.AbstractEventLoop:
     """Return the shared background event loop, starting it on first use.
 
-    A single long-lived loop (daemon thread) hosts every actants call
-    from the sync analyze path. This matters because a shared
-    `actants.LLM` keeps an httpx connection pool whose connections are
-    bound to the loop they were created on — running each call on a
-    fresh `asyncio.run()` loop leaves the second call holding pooled
-    connections from a closed loop ("RuntimeError: Event loop is
-    closed"). One persistent loop keeps the pool valid for the life of
-    the process.
+    Every actants call from the sync analyze path runs on this one loop: a
+    shared `actants.LLM` holds an httpx pool whose connections are bound to
+    the loop that created them, so a per-call `asyncio.run()` loop would leave
+    later calls reusing connections from a closed loop.
     """
     global _LLM_LOOP
     with _LLM_LOOP_LOCK:
@@ -182,22 +144,12 @@ def _persistent_loop() -> asyncio.AbstractEventLoop:
 
 
 def _run(coro: Any) -> Any:
-    """Run an async call from sync code, regardless of event-loop state.
-
-    Always executes on the shared persistent loop (see
-    `_persistent_loop`), so it is safe both from plain sync code and
-    from inside another running event loop.
-    """
+    """Run an async call from sync code, including from inside a running loop."""
     return asyncio.run_coroutine_threadsafe(coro, _persistent_loop()).result()
 
 
 def _await_in_thread(coro: Any) -> Any:
-    """Run coro on the shared background loop from any thread.
-
-    `actants.LLM.extract` is async; the analyze package is sync. When
-    we're inside a running loop already, we cannot nest `asyncio.run`,
-    so we hop to the persistent worker-thread loop instead.
-    """
+    """Run coro on the shared background loop from any thread."""
     return asyncio.run_coroutine_threadsafe(coro, _persistent_loop()).result()
 
 
@@ -206,21 +158,13 @@ def _await_in_loop(coro: Any, loop: asyncio.AbstractEventLoop | None = None) -> 
     return _await_in_thread(coro)
 
 
-# ---------------------------------------------------------------------------
-# Health check + model discovery
-# ---------------------------------------------------------------------------
-
-
 def list_local_models() -> list[dict[str, Any]]:
     """Return the model catalog reported by the configured Ollama daemon.
 
-    Honors ``MEETMIND_LLM_BASE_URL`` / ``ACTANTS_BASE_URL`` so users running
-    Ollama on a different host or port (or LM Studio's `/v1/models`) get
-    their actual catalog. Returns ``[]`` for any non-Ollama provider —
-    listing remote models requires hosted-API auth, out of scope for the
-    `status` command. Useful for `meetmind status`.
+    Honors ``MEETMIND_LLM_BASE_URL`` / ``ACTANTS_BASE_URL``. Returns ``[]``
+    for non-Ollama providers, whose catalogs need hosted-API auth.
     """
-    import httpx  # already a dep
+    import httpx
 
     cfg = llm_config_summary()
     if cfg["provider"] != "ollama":
@@ -236,13 +180,10 @@ def list_local_models() -> list[dict[str, Any]]:
 
 
 def best_available_local_model(prefer: list[str] | None = None) -> str | None:
-    """Pick a sensible local model for analyze paths.
+    """Pick a local model for analyze paths.
 
-    Strategy:
-      1. If `MEETMIND_LLM_MODEL` is set, use it.
-      2. Else if any of `prefer` are installed locally, use the first hit.
-      3. Else first installed local (non-cloud) model.
-      4. Else None — caller falls back to MockLLM or surfaces a hint.
+    Order: `MEETMIND_LLM_MODEL`, then the first installed entry from `prefer`,
+    then any installed local model. None when nothing local is installed.
     """
     env_model = _resolve_model(None)
     if env_model:
@@ -250,9 +191,8 @@ def best_available_local_model(prefer: list[str] | None = None) -> str | None:
 
     catalog = list_local_models()
     installed = {m.get("name", ""): m for m in catalog}
-    # Cloud-routed entries have name suffix `:cloud`. We prefer local-only
-    # for the analyze path because LLM calls there can include private
-    # transcript content.
+    # Cloud-routed entries carry a `:cloud` suffix. Analyze prompts can contain
+    # private transcript text, so only local-only models are eligible here.
     local_only = {n: m for n, m in installed.items() if not n.endswith(":cloud")}
     if not local_only:
         return None
@@ -260,9 +200,6 @@ def best_available_local_model(prefer: list[str] | None = None) -> str | None:
     preferences = list(
         prefer
         or [
-            # Preference ladder — first match wins. Gemma 4 is the
-            # default chat model for analyze (best instruction
-            # following + reliable JSON among small local models).
             "gemma4",
             "gemma3",
             "qwen3:30b-a3b",

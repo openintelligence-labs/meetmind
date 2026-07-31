@@ -87,9 +87,6 @@ async def test_handshake_returns_token_for_loopback():
         await asyncio.wait_for(server_task, timeout=4.0)
 
 
-# ─────────────── audio playback + rename/delete (v0.21) ───────────────
-
-
 async def _seed_meeting_with_audio(tmp_path):
     """Create a real meeting row with a real WAV file on disk."""
     import wave
@@ -129,7 +126,6 @@ async def test_audio_route_streams_persisted_wav(app_and_client, tmp_path, monke
         resp = await c.get(f"/v1/meeting/{mid}/audio/mic")
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "audio/wav"
-        # File body matches what's on disk.
         assert resp.content == wav_path.read_bytes()
 
 
@@ -217,7 +213,6 @@ async def test_delete_meeting_unlinks_audio_and_cascades(app_and_client, tmp_pat
         resp = await c.delete(f"/v1/meeting/{mid}")
         assert resp.status_code == 200
         assert resp.json()["deleted"] is True
-    # WAV is gone and the meeting row is gone.
     assert not wav_path.exists()
     from meetmind.memory.store import Store
 
@@ -308,9 +303,10 @@ async def test_compliance_status_endpoint(app_and_client, tmp_path, monkeypatch)
 
 
 async def test_static_ui_is_mounted_when_present(app_and_client):
-    """If the tauri/ui directory is present in the repo, the index page
-    must be served at /. (In an installed wheel without UI files this
-    test would skip — we don't currently package UI in the wheel.)"""
+    """When the tauri/ui directory is present, the index page is served at /.
+
+    Skipped in an installed wheel, which does not package the UI files.
+    """
     from meetmind.api.http import UI_DIR
 
     if not UI_DIR.is_dir():
@@ -321,7 +317,6 @@ async def test_static_ui_is_mounted_when_present(app_and_client):
         resp = await c.get("/")
         assert resp.status_code == 200
         body = resp.text.lower()
-        # Sanity: it really is the overlay shell.
         assert "meetmind" in body
         assert "<script" in body
 

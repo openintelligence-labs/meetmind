@@ -1,13 +1,10 @@
-"""GitHub Issues integration via the `gh` CLI (S11.8).
+"""GitHub Issues integration via the `gh` CLI.
 
-Shells out to the user's authenticated `gh` install rather than holding
-its own GitHub credentials — that's the same trust pattern as `gh`
-itself and avoids us needing OAuth setup or a PAT secret store.
+Shells out to the user's authenticated `gh` install rather than holding its
+own credentials, which avoids an OAuth flow or a PAT secret store entirely.
+A missing or unauthenticated `gh` surfaces an error rather than a silent noop.
 
-If `gh` isn't installed or authed, we surface a clear error rather
-than silently falling back to noop.
-
-Module is a leaf — only depends on memory + models. No api/ imports.
+Module is a leaf: memory and models only.
 """
 
 from __future__ import annotations
@@ -30,7 +27,7 @@ class _StoreLike(Protocol):
 
 @dataclass
 class GhIssueRef:
-    """Minimal record of an issue we created."""
+    """Minimal record of a created issue."""
 
     number: int | None  # None when --dry-run
     url: str | None
@@ -60,9 +57,8 @@ def export_action_items(
 ) -> list[GhIssueRef]:
     """Open one GitHub issue per open action item in the meeting.
 
-    `repo` is "owner/name". Existing-issue dedup is left to the user
-    (gh doesn't dedupe; we don't try to). Returns one ``GhIssueRef``
-    per item.
+    `repo` is "owner/name". Dedup against existing issues is left to the
+    caller. Returns one ``GhIssueRef`` per item.
     """
     actions = store.list_action_items(meeting_id=meeting_id, status="open")
     if not actions:

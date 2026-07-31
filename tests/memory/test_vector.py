@@ -16,8 +16,6 @@ from meetmind.memory.vector import (
     hash_embedder,
 )
 
-# ────────── LanceDB list_tables() shape regression guard ──────────
-
 
 def test_existing_table_names_handles_flat_list() -> None:
     """Older LanceDB returned `list[str]` from list_tables()."""

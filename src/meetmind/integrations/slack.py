@@ -1,24 +1,13 @@
-"""Slack integration via Incoming Webhooks (S11.6).
+"""Slack integration via Incoming Webhooks.
 
-No OAuth, no bot install. The user creates an Incoming Webhook in
-Slack's app config UI, exports the URL as ``SLACK_WEBHOOK_URL`` (or
-passes it explicitly), and ``meetmind export slack <meeting_id>``
-posts a Block Kit summary to that channel.
+No OAuth and no bot install: the user sets ``SLACK_WEBHOOK_URL`` and
+``meetmind export slack <meeting_id>`` posts a Block Kit summary.
 
-**Egress note.** This is one of three code paths in MeetMind that
-deliberately leaves the device (LLM transport, GitHub Issues via the
-``gh`` CLI, Slack webhooks). Default config never reaches this code
-because no ``SLACK_WEBHOOK_URL`` is set; the
-``tests/security/test_no_outbound_calls.py`` test passes because it
-doesn't import this module.
+Egress: this is one of the few code paths that deliberately leaves the
+device. It is unreachable unless a webhook URL is configured.
 
-Module is a leaf per the import-linter contract: no dependency on
-api/, capture/, stt/, diarize/, or analyze/. Only memory + models via
-structural typing.
-
-**Unblock action for shipping users.** Create the webhook at
-https://api.slack.com/messaging/webhooks (App → Incoming Webhooks),
-copy the resulting URL, set it as ``SLACK_WEBHOOK_URL`` in the env.
+Module is a leaf per the import-linter contract: memory and models only,
+via structural typing.
 """
 
 from __future__ import annotations
@@ -157,8 +146,7 @@ def _build_payload(meeting: Meeting, store: _StoreLike) -> dict[str, Any]:
 def _post(url: str, body: bytes) -> SlackPostResult:
     """POST the payload. Returns success/failure structurally — never raises.
 
-    We use stdlib urllib instead of httpx because integrations is a
-    leaf and we want to keep dep weight low here.
+    Stdlib urllib rather than httpx, to keep this leaf package dependency-free.
     """
     req = urllib.request.Request(  # noqa: S310 — URL is user-supplied webhook
         url,

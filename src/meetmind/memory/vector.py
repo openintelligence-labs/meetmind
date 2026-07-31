@@ -1,15 +1,8 @@
-"""LanceDB embedded vector store + hybrid search.
+"""LanceDB embedded vector store with hybrid search.
 
-Stores transcript-segment embeddings keyed by `(meeting_id, segment_id)`
-with their text, channel, speaker, and start/end timestamps. Hybrid
-retrieval combines BM25 (lexical) + cosine (dense) via Reciprocal Rank
-Fusion (RRF, k=60). ColBERT rerank lands in v0.10.x once we have a
-named-entity heuristic.
-
-This module is purely the persistence + retrieval layer. The embedder
-is pluggable: pass any callable `embed(text: str) -> list[float]` to
-`HybridIndex.add` / `HybridIndex.search`. Production uses
-`nomic-embed-text v2`; tests use a deterministic hash-based stub.
+Stores transcript-segment embeddings keyed by `(meeting_id, segment_id)` and
+retrieves them by fusing BM25 and cosine ranks via RRF. The embedder is
+pluggable: any callable `embed(text: str) -> list[float]`.
 """
 
 from __future__ import annotations
@@ -35,7 +28,7 @@ Embedder = Callable[[str], list[float]]
 
 @dataclass(frozen=True)
 class IndexedSegment:
-    """One row in the vector store. Wire-format-stable."""
+    """One row in the vector store."""
 
     meeting_id: str
     segment_id: int
@@ -69,30 +62,26 @@ class SearchHit:
 
 
 def _existing_table_names(db) -> list[str]:
-    """Return the list of table names known to a LanceDB connection.
+    """Return the table names known to a LanceDB connection.
 
-    LanceDB ≥0.16 returns a paginated tuple from ``list_tables()``
-    (shape: ``[("tables", [...]), ("page_token", None)]``) which is
-    counter-intuitive — older releases returned a flat list of strings,
-    and even older releases used ``table_names()``. This helper covers
-    all three so we can keep the call site clean.
+    Covers three API shapes: ``table_names()`` on old releases, a flat list
+    from ``list_tables()``, and the paginated
+    ``[("tables", [...]), ("page_token", None)]`` form on LanceDB >=0.16.
     """
     raw: Any
     try:
         raw = db.list_tables()  # type: ignore[attr-defined]
     except AttributeError:
         raw = db.table_names()  # type: ignore[attr-defined]
-    # Already a plain list of strings? Return it.
     materialized = list(raw)
     if all(isinstance(x, str) for x in materialized):
         return materialized
-    # Paginated tuple form: dict-style 2-tuples carrying the tables key.
     for item in materialized:
         if isinstance(item, tuple) and len(item) == 2 and item[0] == "tables":
             inner = item[1]
             if isinstance(inner, list):
                 return [s for s in inner if isinstance(s, str)]
-    # Unrecognized shape — log + return empty so the caller will create.
+    # Unrecognized shape: return empty so the caller creates the table.
     log.warning("unrecognized list_tables() shape: %r", materialized)
     return []
 
@@ -130,8 +119,7 @@ class HybridIndex:
     """Hybrid (BM25 + dense) retriever over transcript segments.
 
     Open with `HybridIndex.open(path, vector_dim, embedder)`; the LanceDB
-    directory at `path` is created lazily on first add. Tests typically
-    pass `tmp_path / "lancedb"`.
+    directory at `path` is created lazily on first add.
     """
 
     def __init__(
@@ -194,10 +182,8 @@ class HybridIndex:
                 f"embedder returned {len(query_vec)}-d vector; expected {self.vector_dim}"
             )
 
-        # Pull candidate rows once; for the data sizes this index targets
-        # (one user's meetings) loading and ranking in Python is fine.
-        # Production paths swap to LanceDB native hybrid search once the
-        # FTS index API stabilizes there. Keeping it simple for v0.10.
+        # Ranking happens in Python over all candidate rows, which holds up at
+        # the scale this index targets (a single user's meetings).
         rows: list[dict[str, Any]] = self._fetch_all(meeting_id=meeting_id)
         if not rows:
             return []
@@ -208,7 +194,7 @@ class HybridIndex:
         bm25_rank = _rank(bm25_scores, descending=True)
         dense_rank = _rank(dense_scores, descending=True)
 
-        fused: list[tuple[float, int]] = []  # (score, idx)
+        fused: list[tuple[float, int]] = []  # (score, row index)
         for i in range(len(rows)):
             score = 0.0
             if bm25_scores[i] > 0:
@@ -233,7 +219,7 @@ class HybridIndex:
         return hits
 
     def _fetch_all(self, *, meeting_id: str | None) -> list[dict[str, Any]]:
-        """Return matching rows as plain dicts. Pyarrow-table → list-of-dict."""
+        """Return matching rows as plain dicts."""
         if meeting_id is None:
             tbl = self._table.to_arrow()
         else:
@@ -249,11 +235,6 @@ class HybridIndex:
         ]
 
 
-# ---------------------------------------------------------------------------
-# Stand-alone scoring helpers (also exported for unit tests)
-# ---------------------------------------------------------------------------
-
-
 def _tokenize(text: str) -> list[str]:
     return [t for t in "".join(c.lower() if c.isalnum() else " " for c in text).split() if t]
 
@@ -265,7 +246,7 @@ def _bm25_scores(
     k1: float = 1.5,
     b: float = 0.75,
 ) -> list[float]:
-    """Plain BM25 implementation — sufficient for single-user corpora."""
+    """Score `documents` against `query` with BM25."""
     if not documents:
         return []
     docs_tokens = [_tokenize(d) for d in documents]
@@ -325,17 +306,11 @@ def _rank(values: list[float], *, descending: bool) -> list[int]:
     return out
 
 
-# ---------------------------------------------------------------------------
-# Reference embedder for tests + low-resource fallback
-# ---------------------------------------------------------------------------
-
-
 def hash_embedder(dim: int = 64) -> Embedder:
-    """Token-hash bag-of-words embedder. Deterministic, no model deps.
+    """Deterministic token-hash bag-of-words embedder with no model deps.
 
-    Sufficient for unit tests of the indexing + ranking machinery; not
-    intended for production retrieval quality. Production uses
-    `nomic-embed-text v2` via actants → Ollama.
+    Exercises the indexing and ranking machinery; retrieval quality is not
+    comparable to a real embedding model.
     """
     import hashlib
 
@@ -344,7 +319,7 @@ def hash_embedder(dim: int = 64) -> Embedder:
         for tok in _tokenize(text):
             h = int.from_bytes(hashlib.sha256(tok.encode("utf-8")).digest()[:4], "big")
             vec[h % dim] += 1.0
-        # L2-normalize so cosine = dot.
+        # L2-normalize so cosine reduces to a dot product.
         norm = math.sqrt(sum(x * x for x in vec))
         if norm > 0:
             vec = [x / norm for x in vec]

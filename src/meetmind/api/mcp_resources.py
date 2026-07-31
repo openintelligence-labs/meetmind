@@ -1,21 +1,9 @@
-"""MCP `resources/*` primitives for MeetMind.
+"""MCP `resources/*` primitives: read-only meeting state addressed by URI.
 
-Resources are addressable, read-only chunks of meeting state that an MCP
-client (Claude / Cursor / Windsurf) can fetch by URI. Unlike tools (which
-are RPC-style), resources are listable and pull-able like files.
-
-URI scheme: ``meetmind://`` — opaque, local, never leaves the device.
-
-  meetmind://meetings                       — index of recent meetings
-  meetmind://meeting/{id}                   — full meeting record (JSON)
-  meetmind://meeting/{id}/transcript        — transcript as Markdown
-  meetmind://meeting/{id}/summary           — Chain-of-Density summary
-  meetmind://meeting/{id}/decisions         — decisions as Markdown
-  meetmind://meeting/{id}/actions           — action items as Markdown
-
-The MCP wire payload for `resources/read` is `{contents: [{uri, mimeType,
-text}]}`. We always return a single content item per read; multi-resource
-reads fan out at the JSON-RPC layer.
+The ``meetmind://`` scheme covers ``meetings``, ``people``,
+``meeting/{id}`` (plus ``/transcript``, ``/summary``, ``/decisions``,
+``/actions``), and ``person/{id}/profile``. Each read returns exactly one
+content item; multi-resource reads fan out at the JSON-RPC layer.
 """
 
 from __future__ import annotations
@@ -59,10 +47,6 @@ class ResourceContent:
         return {"uri": self.uri, "mimeType": self.mime_type, "text": self.text}
 
 
-# ---------------------------------------------------------------------------
-# URI helpers
-# ---------------------------------------------------------------------------
-
 _MEETING_URI_RE = re.compile(
     r"^meetmind://meeting/(?P<id>[A-Za-z0-9._-]+)(?:/(?P<sub>transcript|summary|decisions|actions))?$"
 )
@@ -71,13 +55,10 @@ _PERSON_URI_RE = re.compile(r"^meetmind://person/(?P<id>[A-Za-z0-9._-]+)(?:/(?P<
 
 
 def list_resources(store: Store, *, limit: int = 50) -> list[ResourceDescriptor]:
-    """Enumerate the meeting index plus per-meeting subresources.
+    """Enumerate the index resources plus one descriptor per meeting.
 
-    The first item is always the meetings index. After that we emit one
-    descriptor per meeting (the meeting record itself) — the per-meeting
-    subresources (transcript/summary/decisions/actions) are advertised
-    via the ``meetings`` index document so clients can pull them on
-    demand without us blowing up the list with N×4 items.
+    Per-meeting subresources are advertised inside the ``meetings`` index
+    document rather than listed here, which would multiply the list by four.
     """
     out: list[ResourceDescriptor] = [
         ResourceDescriptor(
@@ -144,11 +125,6 @@ def read_resource(store: Store, uri: str) -> ResourceContent:
     raise KeyError(f"unknown resource subpath: {sub}")  # pragma: no cover
 
 
-# ---------------------------------------------------------------------------
-# Readers
-# ---------------------------------------------------------------------------
-
-
 def _read_meetings_index(store: Store) -> ResourceContent:
     meetings = store.list_meetings(limit=200)
     body = {
@@ -204,8 +180,6 @@ def _read_person_profile(store: Store, speaker_id: str) -> ResourceContent:
     speaker = store.get_speaker(speaker_id)
     if speaker is None:
         raise LookupError(f"speaker not found: {speaker_id}")
-    # Aggregate talk-time, meetings spoken in, and a few example
-    # quotes. Cheap to compute even for a year of meetings.
     rows = store.conn.execute(
         """
         SELECT meeting_id, text, start_ms, end_ms
@@ -284,11 +258,6 @@ def _read_actions(store: Store, meeting: Meeting) -> ResourceContent:
         mime_type="text/markdown",
         text=_actions_to_markdown(meeting, items),
     )
-
-
-# ---------------------------------------------------------------------------
-# Markdown formatters
-# ---------------------------------------------------------------------------
 
 
 def _meeting_blurb(m: Meeting) -> str:

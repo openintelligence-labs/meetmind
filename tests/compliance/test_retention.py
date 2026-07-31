@@ -1,4 +1,4 @@
-"""Tests for compliance.retention (S14.4) + erasure cascade (S14.3)."""
+"""Tests for compliance.retention and the erasure cascade."""
 
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ def test_sweep_dry_run_makes_no_changes(tmp_path: Path):
 
 
 def test_sweep_deletes_old_voiceprints_keeps_consent_event(tmp_path: Path):
-    """S14.3 — erasure cascades through speakers; consent tombstone retained."""
+    """Erasure cascades through speakers; the consent tombstone is retained."""
     db = tmp_path / "store.db"
     now = datetime(2026, 5, 6, tzinfo=UTC)
     old_consent = now - timedelta(days=400)
@@ -104,7 +104,7 @@ def test_sweep_deletes_old_voiceprints_keeps_consent_event(tmp_path: Path):
 
 
 def test_forget_meeting_cascade_deletes_segments(tmp_path: Path):
-    """S14.3 sanity: deleting a meeting wipes its child segments via FK cascade."""
+    """Deleting a meeting wipes its child segments via FK cascade."""
     db = tmp_path / "store.db"
     with _seed_store(db) as store:
         m = Meeting(id="01CASCADE", title="kickoff")

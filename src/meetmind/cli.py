@@ -1,19 +1,8 @@
 """MeetMind CLI.
 
-Sprint 1 surface (v0.4):
-
-    meetmind --version
-    meetmind status
-    meetmind record [--duration N] [--source <path>] [--stt <path>]
-
-`record` runs the end-to-end pipeline:
-    capture sidecar  →  audio pipeline (resample + VAD)  →  STT sidecar
-                                                          →  stdout transcript
-
-By default it locates the bundled native sidecars; if they are missing it
-falls back to the Python mock fixtures (the same path used in CI), which
-is the v0.4 contract: the harness always works, the production sidecars
-swap in transparently as they're built.
+`record` runs capture sidecar → audio pipeline (resample + VAD) → STT sidecar.
+Native sidecars are located automatically; missing ones fall back to the Python
+mock fixtures so the harness works without a Swift build.
 """
 
 from __future__ import annotations
@@ -47,11 +36,6 @@ from meetmind.stt.parakeet_v3 import ParakeetSidecarBackend, find_stt_sidecar
 log = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Sidecar discovery (capture)
-# ---------------------------------------------------------------------------
-
-
 def _find_capture_sidecar() -> Path | None:
     env = os.environ.get("MEETMIND_CAPTURE_SIDECAR")
     if env and Path(env).exists():
@@ -68,7 +52,6 @@ def _find_capture_sidecar() -> Path | None:
 
 
 def _find_mock_capture() -> Path:
-    """Pure-Python mock capture, always available (used in CI + dev fallback)."""
     here = Path(__file__).resolve().parents[2]
     fixture = here / "tests" / "fixtures" / "mock_sidecar.py"
     if not fixture.exists():
@@ -105,11 +88,6 @@ def _find_mock_stt() -> Path:
     launcher.write_text(f'#!/usr/bin/env bash\nexec "{sys.executable}" "{fixture}" "$@"\n')
     launcher.chmod(0o755)
     return launcher
-
-
-# ---------------------------------------------------------------------------
-# CLI commands
-# ---------------------------------------------------------------------------
 
 
 @click.group()
@@ -384,11 +362,6 @@ def ui_cmd(port: int, open_browser: bool) -> None:
         click.echo("# meetmind ui stopped", err=True)
 
 
-# ---------------------------------------------------------------------------
-# End-to-end runner
-# ---------------------------------------------------------------------------
-
-
 async def _run_record(
     capture_bin: Path,
     stt_bin: Path,
@@ -407,14 +380,9 @@ async def _run_record(
 ) -> str | None:
     """Run the full capture → STT → bus/store pipeline.
 
-    ``stream_id``:
-        - ``StreamId.MIC``       — transcribe mic only
-        - ``StreamId.LOOPBACK``  — transcribe system audio only
-        - ``None``               — transcribe BOTH in parallel (real-meeting
-          mode: your voice via mic, everyone else via loopback)
-
-    ``stop_event`` allows an out-of-band caller (e.g. the API server) to
-    stop the recording cleanly without sending SIGTERM.
+    Args:
+        stream_id: MIC or LOOPBACK for a single stream; None for both in parallel.
+        stop_event: lets an out-of-band caller stop the recording without SIGTERM.
     """
     capture_env: dict[str, str] | None = None
     using_mock = (
@@ -424,16 +392,11 @@ async def _run_record(
         # Mock capture sidecar reads MOCK_CHUNKS from env (10 ms per chunk).
         chunks_for_duration = max(1, int(duration * 100)) if duration > 0 else 100
         capture_env = {**os.environ, "MOCK_CHUNKS": str(chunks_for_duration)}
-    # Real native sidecars on macOS now stream live mic + Core Audio Tap
-    # loopback (S-Mac1 + S-Mac1c). MEETMIND_CAPTURE_FAKE is honored if the
-    # caller explicitly set it in the environment, but we no longer force
-    # it on by default.
 
     capture = SidecarProcess(capture_bin, env=capture_env)
 
-    # Stream targets: which capture streams should we transcribe?
-    # `None` (default for real meetings) = both. Each gets its own STT
-    # backend so they can run in parallel without contending for stdin.
+    # Each stream gets its own STT backend so they run in parallel without
+    # contending for a single sidecar's stdin.
     stream_targets: list[StreamId] = (
         [StreamId.MIC, StreamId.LOOPBACK] if stream_id is None else [stream_id]
     )
@@ -441,9 +404,8 @@ async def _run_record(
         sid: ParakeetSidecarBackend(binary=stt_bin) for sid in stream_targets
     }
 
-    # Persistent store wiring. We open the SQLCipher-shaped sqlite3
-    # database on demand; opening eagerly keeps the file fresh and
-    # surfaces permission/locking issues before the model spins up.
+    # Open the store before the model spins up so permission/locking errors
+    # surface early rather than mid-meeting.
     store = None
     meeting = None
     if db_path is not None:
@@ -459,15 +421,13 @@ async def _run_record(
         )
         store.upsert_meeting(meeting)
 
-    # Audio persistence — opt-in, one WAV per stream. We only enable
-    # this when we also have a meeting row, because the file path is
-    # keyed off meeting.id and there's nothing to point at otherwise.
+    # Requires a meeting row: the WAV path is keyed off meeting.id.
     wav_writers: dict[StreamId, Any] = {}
     if persist_audio and meeting is not None:
         from meetmind.capture.wav_writer import WavWriter, default_audio_path
 
-        # Capture sidecar produces s16le @ 48 kHz mono per stream — write the
-        # raw bytes through; the pipeline's 16 kHz resample is for STT only.
+        # Sidecar emits s16le @ 48 kHz mono; the pipeline's 16 kHz resample is
+        # for STT only, so the raw bytes pass through here.
         for sid in (StreamId.MIC, StreamId.LOOPBACK) if stream_id is None else [stream_id]:
             label = "mic" if sid is StreamId.MIC else "loopback"
             path = default_audio_path(meeting.id, label)
@@ -503,12 +463,10 @@ async def _run_record(
     for sid in stream_targets:
         await stts[sid]._spawn()
 
-    # Watchdog: every 500 ms, check that the capture sidecar is still
-    # alive. If it dies mid-meeting, publish a SidecarEvent and trip the
-    # stop_signal so the meeting closes cleanly rather than hanging on
-    # an empty audio iterator. The recording is single-shot — we don't
-    # respawn automatically because the OS permission state may have
-    # changed (TCC, ScreenCaptureKit) and a respawn loop would mask it.
+    # If the sidecar dies mid-meeting, close the meeting cleanly instead of
+    # hanging on an empty audio iterator. Deliberately does not respawn: OS
+    # permission state (TCC, ScreenCaptureKit) may have changed, and a respawn
+    # loop would mask that.
     watchdog_stop = asyncio.Event()
     sidecar_died = asyncio.Event()
 
@@ -545,17 +503,14 @@ async def _run_record(
         await capture.send("start", {"streams": ["mic", "loopback"]})
 
         stop_signal = asyncio.Event()
-        # Per-stream fan-out queues — one producer reads `capture.audio()`,
-        # multiple consumers (one per StreamId in stream_targets) each get
-        # their own queue of matching chunks. Without this, dual-stream
-        # mode would have to consume the iterator twice.
+        # One producer reads `capture.audio()` and fans chunks out per stream;
+        # dual-stream mode would otherwise have to consume the iterator twice.
         chunk_queues: dict[StreamId, asyncio.Queue] = {
             sid: asyncio.Queue(maxsize=200) for sid in stream_targets
         }
         _SENTINEL = object()
 
         async def fanout_producer() -> None:
-            """Read capture chunks once, route each to its stream's queue."""
             audio_iter = capture.audio().__aiter__()
             try:
                 while True:
@@ -582,10 +537,7 @@ async def _run_record(
                     q = chunk_queues.get(chunk.stream)
                     if q is not None:
                         await q.put(chunk)
-                    # Persist raw audio (opt-in). Best-effort: never
-                    # block the producer on disk I/O for more than a
-                    # frame. wav_writers.get is cheap; the writer's
-                    # internal lock is also cheap.
+                    # Best-effort: never block the producer on disk I/O.
                     writer = wav_writers.get(chunk.stream)
                     if writer is not None:
                         try:
@@ -593,7 +545,7 @@ async def _run_record(
                         except Exception as e:
                             log.warning("wav append failed: %s", e)
             finally:
-                # Drop a sentinel into each queue so consumers can exit.
+                # Sentinel unblocks consumers waiting on an empty queue.
                 for q in chunk_queues.values():
                     with contextlib.suppress(asyncio.QueueFull):
                         q.put_nowait(_SENTINEL)
@@ -679,9 +631,6 @@ async def _run_record(
         ]
         consume_task = asyncio.gather(producer_task, *consume_tasks)
         if duration > 0:
-            # Wait either for duration to elapse OR for stop_event (out-
-            # of-band shutdown signal from the API server) OR for the
-            # capture sidecar to die unexpectedly.
             wait_tasks: list[asyncio.Task] = [
                 asyncio.create_task(asyncio.sleep(duration), name="record-duration"),
                 asyncio.create_task(sidecar_died.wait(), name="record-sidecar-died"),
@@ -694,8 +643,7 @@ async def _run_record(
                 with contextlib.suppress(asyncio.CancelledError):
                     await p
             stop_signal.set()
-            # Hard cap the drain window: if the pipeline can't gracefully
-            # finalize within the window, cancel and tear down.
+            # Hard cap the drain window, then cancel and tear down.
             try:
                 await asyncio.wait_for(consume_task, timeout=2.0)
             except TimeoutError:
@@ -704,8 +652,7 @@ async def _run_record(
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await consume_task
         else:
-            # duration == 0 — run until stop_event fires (API-driven),
-            # the sidecar dies, or the user sends SIGTERM/SIGINT.
+            # duration == 0: run until stop_event, sidecar death, or SIGINT.
             if stop_event is not None:
                 stopper = asyncio.create_task(
                     asyncio.wait(
@@ -726,8 +673,6 @@ async def _run_record(
                     with contextlib.suppress(asyncio.CancelledError, Exception):
                         await consume_task
             else:
-                # No external stop signal — finish when either the
-                # capture iterator naturally ends or the sidecar dies.
                 died_task = asyncio.create_task(sidecar_died.wait(), name="sidecar-died-watch")
                 done, pending = await asyncio.wait(
                     {asyncio.ensure_future(consume_task), died_task},
@@ -747,8 +692,8 @@ async def _run_record(
                     with contextlib.suppress(asyncio.CancelledError, Exception):
                         await p
     finally:
-        # Stop the watchdog first so it doesn't report a "died" event
-        # for the clean shutdown we're about to do.
+        # Stop the watchdog first so the clean shutdown below isn't reported
+        # as a sidecar death.
         watchdog_stop.set()
         watchdog_task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -772,8 +717,7 @@ async def _run_record(
             sse_server_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await sse_server_task
-        # Close any WAV writers and stamp the paths onto the meeting row.
-        # Done before the store close so the upsert below carries them.
+        # Close writers before the store upsert below so it carries the paths.
         audio_paths: dict[StreamId, Path] = {}
         for sid, writer in list(wav_writers.items()):
             try:
@@ -796,11 +740,6 @@ async def _run_record(
             store.upsert_meeting(persisted)
             store.close()
     return meeting.id if meeting is not None else None
-
-
-# ---------------------------------------------------------------------------
-# Pretty-printing
-# ---------------------------------------------------------------------------
 
 
 _LAST_PARTIAL_LEN = 0
@@ -1038,20 +977,11 @@ def speakers(db: Path | None) -> None:
 def enroll_cmd(name: str, audio: Path | None, db: Path | None, accept: bool, stub: bool) -> None:
     """Enroll a voiceprint for NAME.
 
-    Two modes:
+    With ``--audio CLIP.wav``, embeds the clip and persists the centroid. Without
+    it (or with ``--stub``), uses a deterministic name-hash embedding, which
+    populates the matcher for tests but is not a usable voiceprint.
 
-      • With ``--audio CLIP.wav``: load the clip, run it through the
-        configured embedder (ReDimNet-B3 ONNX if installed, else the
-        mel-hash baseline), persist the centroid + signed
-        ``ConsentEvent``. This is the real enrollment path.
-
-      • Without ``--audio`` (or with ``--stub``): use a deterministic
-        name-hash stub embedding. Useful for CI to populate the matcher
-        with named centroids without needing a clip, but does NOT
-        produce a usable voiceprint.
-
-    Either way, the ``ConsentEvent`` is Ed25519-signed and goes into
-    the audit log so the audit trail is the same regardless of source.
+    Either way the ``ConsentEvent`` is Ed25519-signed into the audit log.
     """
     import hashlib  # noqa: PLC0415
 
@@ -1105,9 +1035,8 @@ def enroll_cmd(name: str, audio: Path | None, db: Path | None, accept: bool, stu
 def _embed_from_audio_file(path: Path) -> np.ndarray:
     """Load a WAV/FLAC clip and run it through the default voiceprint embedder.
 
-    Mono mixdown via channel averaging, resampled to the embedder's
-    expected ``SAMPLE_RATE`` (16 kHz). Lazy imports keep the soundfile
-    dep optional for users who never run enrollment.
+    Mono mixdown, resampled to the embedder's 16 kHz ``SAMPLE_RATE``. Lazy
+    imports keep soundfile optional for users who never enroll.
     """
     import numpy as np  # noqa: PLC0415
     import soundfile as sf  # noqa: PLC0415
@@ -1118,9 +1047,8 @@ def _embed_from_audio_file(path: Path) -> np.ndarray:
     if pcm.ndim > 1:
         pcm = pcm.mean(axis=1)
     if sr != SAMPLE_RATE:
-        # Cheap linear resampler — enrollment is one-shot so quality
-        # over performance. For production-grade resampling, users
-        # should provide a clip already at the target rate.
+        # Linear resample is adequate for one-shot enrollment; supply a clip
+        # already at the target rate for better fidelity.
         ratio = SAMPLE_RATE / sr
         new_len = int(round(len(pcm) * ratio))
         idx = np.linspace(0, len(pcm) - 1, new_len)
@@ -1145,9 +1073,9 @@ def _embed_from_audio_file(path: Path) -> np.ndarray:
 def forget_cmd(speaker_id: str, db: Path | None, yes: bool) -> None:
     """Permanently forget a speaker's voiceprint (audit log retained).
 
-    Cascading delete: drops the centroid + ring + Speaker row;
-    transcript_segments.speaker_id is set to NULL; the signed
-    consent log is **kept** so auditors can verify the deletion.
+    Drops the centroid, ring, and Speaker row, and nulls
+    transcript_segments.speaker_id. The signed consent log is kept so auditors
+    can verify the deletion.
     """
     from meetmind.crypto.identity import InMemoryKeyStore, load_or_create_identity
     from meetmind.diarize.enroll import forget
@@ -1207,18 +1135,12 @@ def diarize_cmd(
 ) -> None:
     """Run diarization post-hoc on a recorded meeting.
 
-    Requires the meeting was recorded with ``--persist-audio`` so we
-    have raw PCM to feed the diarizer. Updates each transcript segment's
-    ``speaker_id`` in place. Today this uses the channel-aware mock
-    diarizer (two-cluster RMS-gated) because the production Sortformer
-    sidecar is a separate build step; the wiring is identical, so
-    swapping in the real sidecar is a one-line change in
-    ``_resolve_diarizer``.
+    Requires a meeting recorded with ``--persist-audio``. Updates each
+    transcript segment's ``speaker_id`` in place. Uses the channel-aware mock
+    diarizer; the production Sortformer sidecar is a separate build step.
 
-    With ``--match-enrolled`` (default), after clustering we compute
-    each cluster's centroid embedding and match it against the
-    enrolled-speaker matcher — so ``cluster-A`` becomes ``Alice`` if
-    Alice's voiceprint is in the store.
+    With ``--match-enrolled`` (default), clusters are matched against enrolled
+    voiceprints, so ``cluster-A`` resolves to ``Alice``.
     """
 
     db_path = db or _default_db_path()
@@ -1242,7 +1164,7 @@ async def _diarize_meeting(
     rms_threshold: float,
     match_enrolled: bool,
 ) -> None:
-    """Worker: load audio, run diarizer, stitch onto transcript, update DB."""
+    """Load audio, run the diarizer, stitch onto the transcript, update the DB."""
 
     from meetmind.diarize.stitch import stitch  # noqa: PLC0415
     from meetmind.memory.store import Store  # noqa: PLC0415
@@ -1256,7 +1178,6 @@ async def _diarize_meeting(
         if not segments:
             click.echo(f"# no segments for {meeting_id}", err=True)
             return
-        # Build the Finals list that stitch() expects.
         finals = [
             Final(
                 text=s.text,
@@ -1268,11 +1189,6 @@ async def _diarize_meeting(
             for s in segments
         ]
 
-        # If we have persisted WAVs, run the diarizer over them; otherwise
-        # synthesize the simplest correct fallback: one DiarSegment per
-        # transcript Final, channel-tagged. The stitcher will produce
-        # SpeakerSegments mirroring the existing channel labels — no
-        # information lost, just no clustering gain.
         diar_segments = await _collect_diar_segments(
             meeting,
             finals,
@@ -1283,10 +1199,8 @@ async def _diarize_meeting(
         if match_enrolled:
             stitched = _resolve_to_enrolled_speakers(store, meeting, stitched)
 
-        # Update each transcript segment's speaker_id in place. Match by
-        # (meeting_id, start_ms) tuple — the row id is autoincrementing
-        # so we don't have it here, but start_ms is unique within a
-        # meeting because Finals don't overlap.
+        # Matched on (meeting_id, start_ms) rather than row id: start_ms is
+        # unique within a meeting because Finals don't overlap.
         n_updated = 0
         for s in stitched:
             row = store.conn.execute(
@@ -1310,7 +1224,7 @@ async def _collect_diar_segments(
     *,
     rms_threshold: float,
 ):
-    """Run the mock diarizer over persisted audio (if available)."""
+    """Run the mock diarizer over persisted audio, if any was recorded."""
     from meetmind.diarize.mock import MockDiarBackend  # noqa: PLC0415
     from meetmind.ipc import StreamId  # noqa: PLC0415
 
@@ -1321,9 +1235,8 @@ async def _collect_diar_segments(
         audio_paths.append((StreamId.LOOPBACK, Path(meeting.audio_path_loopback)))
 
     if not audio_paths:
-        # Synthesize one diar segment per final, channel-tagged from the
-        # original transcript row. The stitcher will produce SpeakerSegments
-        # that just mirror the channel labels.
+        # Fallback: one segment per Final, so the stitcher mirrors the existing
+        # channel labels rather than failing.
         from meetmind.diarize.base import DiarSegment  # noqa: PLC0415
 
         click.echo("# diarize: no audio persisted; falling back to channel labels", err=True)
@@ -1370,27 +1283,18 @@ async def _collect_diar_segments(
 
 
 def _resolve_to_enrolled_speakers(store, meeting, stitched):
-    """Match each cluster to an enrolled speaker (if any), then return a
-    new list of SpeakerSegments with `speaker_id` set when matched.
-
-    Cheap-but-correct policy: take the first enrolled speaker whose
-    cosine similarity to the cluster's mean confidence is above the
-    matcher's threshold. The full centroid recovery would require
-    re-embedding per-cluster audio; for v1.0 the matcher's centroid
-    is a good-enough resolver for the common 2-speaker case.
-    """
-    # No enrolled speakers? Nothing to do.
+    """Return SpeakerSegments with `speaker_id` set where a cluster matched."""
     rows = store.conn.execute("SELECT id, display_name FROM speakers").fetchall()
     if not rows:
         return stitched
-    # Trivial mapping: cluster "A" → first enrolled speaker, cluster "B" → second.
-    # This is a placeholder until cluster→centroid re-embedding is wired (R-DIAR-2).
+    # TODO: positional cluster→speaker mapping; replace with centroid
+    # re-embedding so ordering stops mattering.
     ids = [r["display_name"] or r["id"] for r in rows]
     mapping = {"A": ids[0] if ids else None, "B": ids[1] if len(ids) > 1 else None}
     out = []
     for s in stitched:
         sid = mapping.get(s.cluster_id) or s.cluster_id
-        # SpeakerSegment is frozen — build a new one.
+        # SpeakerSegment is frozen.
         from dataclasses import replace  # noqa: PLC0415
 
         out.append(replace(s, speaker_id=sid))
@@ -1512,13 +1416,10 @@ def summarize(
             err=True,
         )
 
-        # One LLM instance shared across all three extraction passes.
-        # Previously the closures rebuilt one per call (3× httpx pool
-        # warmup, 3× model-load on first cold path). Sharing cuts the
-        # warm-meeting summary from ~30s to ~22s on Ollama/gemma4.
+        # Shared across all three extraction passes: one httpx pool, one
+        # cold model load.
         _shared_llm = get_default_llm()
 
-        # Action items
         accepted_actions = []
         if not no_actions:
             click.echo("# extracting action items via actants → Ollama …", err=True)
@@ -1539,7 +1440,6 @@ def summarize(
                 err=True,
             )
 
-        # Decisions
         accepted_decisions = []
         if not no_decisions:
             click.echo("# extracting decisions via actants → Ollama …", err=True)
@@ -1559,7 +1459,6 @@ def summarize(
                 err=True,
             )
 
-        # Chain-of-Density summary
         click.echo("# generating Chain-of-Density summary …", err=True)
 
         def _summary_llm(prompt: str) -> dict:
@@ -1574,7 +1473,6 @@ def summarize(
             action_items=accepted_actions,
         )
 
-        # Persist the summary so the dashboard can show it.
         store.upsert_summary(
             meeting_id,
             tl_dr=sresult.summary.tl_dr,
@@ -1607,11 +1505,6 @@ def summarize(
                 click.echo(f"  └ evidence: {a.evidence_quote!r}")
     finally:
         store.close()
-
-
-# ---------------------------------------------------------------------------
-# Compliance commands (S14.x)
-# ---------------------------------------------------------------------------
 
 
 @main.group()
@@ -1716,11 +1609,6 @@ def retention_sweep_cmd(
         click.echo("# dry run — no rows deleted")
     for line in report.as_lines():
         click.echo(line)
-
-
-# ---------------------------------------------------------------------------
-# Integration commands
-# ---------------------------------------------------------------------------
 
 
 @main.command(name="export-obsidian")
@@ -1840,11 +1728,6 @@ def redact_cmd(text: str | None, profile: str) -> None:
     click.echo(f"# {result.redaction_count} redactions ({result.profile})", err=True)
 
 
-# ---------------------------------------------------------------------------
-# Signed-bundle commands (S13.1 — wired into CLI in v0.20)
-# ---------------------------------------------------------------------------
-
-
 @main.command(name="export-bundle")
 @click.argument("meeting_id")
 @click.option(
@@ -1932,11 +1815,6 @@ def verify_cmd(bundle: Path, fingerprint: str | None) -> None:
         raise click.ClickException("bundle verification failed")
 
 
-# ---------------------------------------------------------------------------
-# Selftest command — telemetry-free health check
-# ---------------------------------------------------------------------------
-
-
 @main.command(name="selftest")
 @click.option(
     "--json",
@@ -1948,12 +1826,8 @@ def verify_cmd(bundle: Path, fingerprint: str | None) -> None:
 def selftest_cmd(as_json: bool) -> None:
     """Run a no-network health check across all major MeetMind subsystems.
 
-    Output is shareable from a GitHub issue (no telemetry — the user
-    pastes it themselves). Each check returns ``ok=True/False`` plus a
-    short note so a maintainer can triage without reproducing the env.
-
-    Exits 0 if every check passes, 1 if any fail. Warnings (e.g. mock
-    sidecar fallback) do not fail the run — they're informational.
+    Exits 0 if every check passes, 1 if any fail. Warnings (e.g. mock sidecar
+    fallback) are informational and do not fail the run.
     """
     checks = _run_selftest()
     if as_json:
@@ -1972,7 +1846,6 @@ def selftest_cmd(as_json: bool) -> None:
 
 
 def _run_selftest() -> list[dict]:  # noqa: C901 — sequential check list reads fine
-    """Sequence of independent checks. Each is a dict for easy JSON output."""
     import tempfile  # noqa: PLC0415
 
     out: list[dict] = []
@@ -1980,11 +1853,9 @@ def _run_selftest() -> list[dict]:  # noqa: C901 — sequential check list reads
     def add(name: str, ok: bool, note: str, *, warn: bool = False) -> None:
         out.append({"name": name, "ok": ok, "note": note, "warn": warn})
 
-    # 1. Python + platform.
     py = sys.version.split()[0]
     add("python", py.startswith(("3.12", "3.13")), f"{py} on {platform.platform()}")
 
-    # 2. Store opens + WAL.
     with tempfile.TemporaryDirectory() as tmp:
         from meetmind.memory.store import Store  # noqa: PLC0415
 
@@ -2001,7 +1872,6 @@ def _run_selftest() -> list[dict]:  # noqa: C901 — sequential check list reads
         except Exception as e:  # noqa: BLE001
             add("storage", False, f"open failed: {e}")
 
-    # 3. Storage encryption mode.
     storage_info = _storage_status_summary()
     add(
         "encryption",
@@ -2010,7 +1880,6 @@ def _run_selftest() -> list[dict]:  # noqa: C901 — sequential check list reads
         warn=storage_info.get("mode", "").startswith("unencrypted"),
     )
 
-    # 4. Sidecar discovery — mock is OK but flag it.
     cap = _find_capture_sidecar()
     add(
         "capture-sidecar",
@@ -2026,7 +1895,7 @@ def _run_selftest() -> list[dict]:  # noqa: C901 — sequential check list reads
         warn=stt is None,
     )
 
-    # 5. actants LLM availability (purely metadata — no network call).
+    # Metadata only; makes no network call.
     try:
         from meetmind.analyze.llm import llm_config_summary  # noqa: PLC0415
 
@@ -2035,7 +1904,6 @@ def _run_selftest() -> list[dict]:  # noqa: C901 — sequential check list reads
     except Exception as e:  # noqa: BLE001
         add("llm", False, f"config error: {e}")
 
-    # 6. Integrations load cleanly.
     try:
         import meetmind.integrations.github  # noqa: F401, PLC0415
         import meetmind.integrations.obsidian  # noqa: F401, PLC0415
@@ -2045,7 +1913,6 @@ def _run_selftest() -> list[dict]:  # noqa: C901 — sequential check list reads
     except Exception as e:  # noqa: BLE001
         add("integrations", False, f"import failed: {e}")
 
-    # 7. End-to-end: write meeting + segment + summary, read it back.
     with tempfile.TemporaryDirectory() as tmp:
         try:
             from datetime import UTC, datetime  # noqa: PLC0415
@@ -2072,11 +1939,6 @@ def _run_selftest() -> list[dict]:  # noqa: C901 — sequential check list reads
             add("end-to-end", False, f"failed: {e}")
 
     return out
-
-
-# ---------------------------------------------------------------------------
-# Demo command — single-process "show me everything"
-# ---------------------------------------------------------------------------
 
 
 @main.command(name="demo")
@@ -2201,15 +2063,13 @@ def demo_cmd(
         )
 
     async def _run() -> None:
-        # Spawn the FastAPI server in the same process so it shares
-        # `default_bus` with the recording loop below.
+        # Same process as the recording loop below so they share `default_bus`.
         server_task = asyncio.create_task(_serve(port=port), name="demo-serve")
         await asyncio.sleep(0.4)  # let uvicorn bind
 
         if open_browser:
             webbrowser.open(url)
 
-        # Coach loop, optional.
         coach_stop: asyncio.Event | None = None
         coach_task: asyncio.Task | None = None
         if coach:
@@ -2219,10 +2079,8 @@ def demo_cmd(
             coach_stop = asyncio.Event()
             coach_task = asyncio.create_task(cl.run(stop=coach_stop), name="demo-coach")
 
-        # Drive the recording on the shared bus. publish_only=True
-        # means the recording uses the existing bus + server we just
-        # started — it won't try to bind a second uvicorn on the same
-        # port.
+        # publish_only reuses the bus + server started above instead of
+        # binding a second uvicorn on the same port.
         record_task = asyncio.create_task(
             _run_record(
                 capture_bin,
@@ -2234,7 +2092,7 @@ def demo_cmd(
                 sse_port=port,
                 db_path=db_path,
                 title=title,
-                coach=False,  # we manage the coach above
+                coach=False,  # managed above
                 publish_only=True,
             ),
             name="demo-record",

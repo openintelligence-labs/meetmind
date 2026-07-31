@@ -1,12 +1,8 @@
 """End-to-end test for `meetmind enroll --audio`.
 
-Builds a synthetic WAV (1.5s of mixed sine waves), runs the CLI in a
-Click runner, asserts:
-  • the speaker row exists in the DB,
-  • the consent event is signed + verifiable,
-  • the centroid bytes were derived from the audio embedder, NOT the
-    deterministic name-hash stub (we check by re-running with --stub
-    and confirming the centroids differ).
+Runs the CLI against a synthetic WAV and checks the speaker row, the signed
+consent event, and that the centroid came from the audio embedder rather than
+the deterministic name-hash stub.
 """
 
 from __future__ import annotations
@@ -139,8 +135,7 @@ def test_enroll_stub_flag_overrides_audio(tmp_path: Path, monkeypatch) -> None:
     speaker_id = result.output.strip().splitlines()[-1]
     with Store.open(db, use_keychain=False) as s:
         speaker = s.get_speaker(speaker_id)
-    # The centroid is stored normalized — we can't byte-equal compare
-    # against expected, but the dim must match the stub's 192.
+    # The centroid is stored normalized, so only the dimension is comparable.
     from meetmind.diarize.matcher import _decode_centroid
 
     decoded = _decode_centroid(speaker)

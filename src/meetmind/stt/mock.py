@@ -1,11 +1,6 @@
-"""MockSTTBackend — deterministic STT for tests and CI.
-
-Emits a programmable script of partials and finals based on RMS energy,
-without touching any model. Used by:
-
-  * Unit tests that exercise the streaming pipeline end-to-end.
-  * The CLI smoke test (S1.9) on platforms where Parakeet isn't built.
-  * The CI matrix on Windows/Linux until those backends land.
+"""Deterministic STT backend for tests, CI, and platforms without a native
+backend. Emits a scripted sequence of partials and finals driven by RMS
+energy, without loading a model.
 """
 
 from __future__ import annotations

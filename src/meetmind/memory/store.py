@@ -1,17 +1,8 @@
 """Encrypted persistent store (SQLCipher / sqlite-compatible).
 
-For development and CI we open a plain stdlib sqlite3 database — the
-production install layers `pysqlcipher3.dbapi2` on top of the same DDL +
-DAL with zero call-site changes (it's API-compatible with stdlib).
-
-Posture:
-  - SQLCipher AES-256 (opt-in via the `meetmind[encrypted]` extra)
-  - Per-DB DEK wrapped by OS keychain
-  - `forget_speaker(speaker_id)` cascade with audit retention
-  - Crypto-shred on backups via DEK wipe (out of scope for the DAL itself)
-
-Module boundary: `memory/` is the only package allowed to open SQLCipher
-connections. All persistence flows through `Store`.
+`pysqlcipher3.dbapi2` is API-compatible with stdlib sqlite3, so the same DDL
+and DAL run on either driver; without the `meetmind[encrypted]` extra the
+store falls back to plain sqlite3. All persistence flows through `Store`.
 """
 
 from __future__ import annotations
@@ -42,19 +33,10 @@ log = logging.getLogger(__name__)
 
 
 def open_connection(path: Path | str, *, passphrase: str | None = None) -> sqlite3.Connection:
-    """Open a connection to the given DB path.
+    """Open a connection to the given DB path with the standard PRAGMAs.
 
-    Resilience PRAGMAs applied on every open:
-      • foreign_keys = ON        — enforce ON DELETE CASCADE
-      • journal_mode = WAL       — survives power loss mid-write
-      • synchronous = NORMAL     — WAL-safe durability w/o full fsync
-      • busy_timeout = 5000      — UI + recorder + summarize can race
-      • temp_store = MEMORY      — keep scratch off disk
-
-    `passphrase` is forwarded to the SQLCipher driver if available
-    (see `_try_sqlcipher_connect`). The stdlib sqlite3 driver ignores
-    it and runs unencrypted; `meetmind status` surfaces this so users
-    know which mode they're in.
+    `passphrase` is forwarded to the SQLCipher driver when available; the
+    stdlib driver ignores it and the database is left unencrypted.
     """
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     conn = _connect(str(path), passphrase=passphrase)
@@ -68,20 +50,18 @@ def open_connection(path: Path | str, *, passphrase: str | None = None) -> sqlit
         log.warning("WAL not available (%s); using truncate journal", e)
         conn.execute("PRAGMA journal_mode = TRUNCATE")
     conn.execute("PRAGMA synchronous = NORMAL")
+    # Recorder, UI, and summarize can all hold the DB at once.
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA temp_store = MEMORY")
     return conn
 
 
-_PYSQLCIPHER_WARNED = False  # Process-global one-shot for the "install extras" hint.
+_PYSQLCIPHER_WARNED = False  # One-shot guard so the hint logs once per process.
 
 
 def _connect(path: str, *, passphrase: str | None) -> sqlite3.Connection:
-    """Driver selection: SQLCipher if available + passphrase given, else stdlib.
-
-    Returns a stdlib-compatible Connection either way. The pysqlcipher3
-    driver is API-compatible with stdlib sqlite3, so the rest of the DAL
-    doesn't branch on driver.
+    """Connect via SQLCipher when a passphrase is given and the driver is
+    installed, else stdlib sqlite3. Either way the Connection is stdlib-shaped.
     """
     if passphrase:
         try:
@@ -89,10 +69,9 @@ def _connect(path: str, *, passphrase: str | None) -> sqlite3.Connection:
 
             c = sqlcipher.connect(path, isolation_level=None)
             # PRAGMA key must be the first statement on the connection.
-            # Quoting follows SQLCipher's recommended single-quote escape.
             quoted = passphrase.replace("'", "''")
             c.execute(f"PRAGMA key = '{quoted}'")
-            # Touch sqlite_master to validate the key works (raises if wrong).
+            # Reading sqlite_master raises here if the key is wrong.
             c.execute("SELECT count(*) FROM sqlite_master").fetchone()
             return c
         except ImportError:
@@ -123,20 +102,17 @@ def is_encrypted(conn: sqlite3.Connection) -> bool:
 
 
 def apply_schema(conn: sqlite3.Connection) -> None:
-    """Apply DDL + run any pending forward migrations.
+    """Apply DDL and run any pending forward migrations.
 
-    Fresh DBs get `SCHEMA_SQL` (which is the v(SCHEMA_VERSION) state)
-    and are stamped immediately. Existing DBs run only the migrations
-    they're missing, wrapped in a single transaction so a crash mid-way
-    leaves the version stamp pointing at the last successful step.
+    Fresh DBs get `SCHEMA_SQL` and are stamped immediately; existing DBs run
+    only the migrations they are missing.
     """
     conn.executescript(_schema.SCHEMA_SQL)
     current = _read_schema_version(conn)
     target = _schema.SCHEMA_VERSION
     if current >= target:
-        # Either a brand-new DB (executescript already wrote the indexes)
-        # or one that was opened by a newer build of MeetMind. We refuse
-        # to silently downgrade — stamp at our target and warn.
+        # Either a brand-new DB or one written by a newer build. Never
+        # silently downgrade: stamp at the target version and warn instead.
         if current > target:
             log.warning(
                 "DB schema_version=%d is newer than this build (%d). "
@@ -150,10 +126,9 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     if not pending:
         _stamp_version(conn, target)
         return
-    # We can't wrap the whole loop in a single transaction because
-    # `executescript` commits implicitly between statements on the
-    # stdlib driver. Apply + stamp per-version instead so a failure
-    # mid-sequence leaves the version stamp at the last successful step.
+    # The loop can't run inside one transaction: `executescript` commits
+    # implicitly on the stdlib driver. Stamping per version instead leaves a
+    # mid-sequence failure pointing at the last step that did apply.
     for version in pending:
         log.info("applying schema migration → v%d", version)
         conn.executescript(MIGRATIONS[version])
@@ -178,11 +153,6 @@ def _stamp_version(conn: sqlite3.Connection, version: int) -> None:
         "INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)",
         ("schema_version", str(version)),
     )
-
-
-# ---------------------------------------------------------------------------
-# Adapters: model ↔ row
-# ---------------------------------------------------------------------------
 
 
 def _iso(dt: datetime | None) -> str | None:
@@ -227,21 +197,11 @@ def _json_to_list(blob: bytes | str | None) -> list:
     return json.loads(blob)
 
 
-# ---------------------------------------------------------------------------
-# Store
-# ---------------------------------------------------------------------------
-
-
 class Store:
-    """Thin DAL on top of a sqlite3 connection.
+    """Thin DAL over a sqlite3 connection.
 
-    Use as a context manager when you want a self-contained scope:
-
-        with Store.open(path) as store:
-            store.upsert_meeting(meeting)
-            store.upsert_segments(segments)
-
-    Or pass an already-open connection if you're sharing it across modules.
+    Use `Store.open(path)` as a context manager for a self-contained scope, or
+    construct it with an already-open connection to share one.
     """
 
     def __init__(self, conn: sqlite3.Connection) -> None:
@@ -255,14 +215,11 @@ class Store:
         passphrase: str | None = None,
         use_keychain: bool = True,
     ) -> Store:
-        """Open the store.
+        """Open the store, applying schema migrations.
 
-        Passphrase resolution:
-          • explicit ``passphrase=`` wins,
-          • else (and ``use_keychain=True``) we ask the keychain for the DEK,
-          • else open unencrypted (dev / CI / locked-keychain hosts).
-
-        Pass ``use_keychain=False`` from tests to keep them hermetic.
+        An explicit ``passphrase`` wins; otherwise the keychain DEK is used
+        when ``use_keychain`` is set, and failing that the DB opens
+        unencrypted. Tests pass ``use_keychain=False`` to stay hermetic.
         """
         if passphrase is None and use_keychain:
             from meetmind.memory.keyring import get_or_create_dek  # noqa: PLC0415
@@ -295,11 +252,8 @@ class Store:
     # -- Meetings -----------------------------------------------------------
 
     def upsert_meeting(self, m: Meeting) -> None:
-        # Use ON CONFLICT … DO UPDATE rather than INSERT OR REPLACE because
-        # REPLACE issues a DELETE first, which would cascade through every
-        # FK that references meetings(id) (transcript_segments, action_items,
-        # decisions) and silently nuke the children. ON CONFLICT preserves
-        # row identity and leaves children alone.
+        # Not INSERT OR REPLACE: REPLACE deletes first, cascading through every
+        # FK referencing meetings(id) and silently dropping the child rows.
         self.conn.execute(
             """
             INSERT INTO meetings (
@@ -402,7 +356,7 @@ class Store:
     # -- Speakers + consent -------------------------------------------------
 
     def upsert_speaker(self, sp: Speaker) -> None:
-        # ON CONFLICT … DO UPDATE — see `upsert_meeting` for rationale.
+        # ON CONFLICT rather than REPLACE — see `upsert_meeting`.
         self.conn.execute(
             """
             INSERT INTO speakers (
@@ -611,10 +565,10 @@ class Store:
         ]
 
     def list_all_decisions(self, *, limit: int = 200) -> list[tuple[str, Decision]]:
-        """Cross-meeting decision listing for MCP / dashboard surfaces.
+        """Return the most recent decisions across all meetings.
 
-        Returns ``(meeting_id, Decision)`` pairs so callers can group or
-        link back without a second query.
+        Yields ``(meeting_id, Decision)`` pairs so callers can group or link
+        back without a second query.
         """
         rows = self.conn.execute(
             "SELECT * FROM decisions ORDER BY rowid DESC LIMIT ?", (int(limit),)
@@ -643,11 +597,7 @@ class Store:
         topics: list[str] | None = None,
         model: str | None = None,
     ) -> None:
-        """Persist the Chain-of-Density summary for a meeting.
-
-        Overwrites any prior summary — the assumption is one summary per
-        meeting at a time, regenerated when the user re-runs `summarize`.
-        """
+        """Persist the summary for a meeting, overwriting any prior one."""
         topics_json = json.dumps(topics or [])
         self.conn.execute(
             """

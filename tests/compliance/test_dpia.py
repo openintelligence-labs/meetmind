@@ -1,4 +1,4 @@
-"""Tests for compliance.dpia (S14.1)."""
+"""Tests for compliance.dpia."""
 
 from __future__ import annotations
 
@@ -62,5 +62,4 @@ def test_generate_dpia_warns_when_provider_is_remote(tmp_path: Path, monkeypatch
 
 def test_dpia_handles_missing_db(tmp_path: Path):
     md = generate_dpia(DpiaInputs(db_path=tmp_path / "nope.db"))
-    # Doesn't crash; counts default to 0/?.
     assert "# Data Protection Impact Assessment" in md

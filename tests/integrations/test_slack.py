@@ -1,8 +1,7 @@
 """Slack exporter tests.
 
-No real network calls — all tests use ``dry_run=True`` or monkeypatch
-``urllib.request.urlopen``. Mirrors the testing posture of the GitHub
-integration (which also avoids hitting the real `gh` binary).
+No real network calls: every test uses ``dry_run=True`` or monkeypatches
+``urllib.request.urlopen``.
 """
 
 from __future__ import annotations
@@ -81,7 +80,7 @@ def test_unknown_meeting_returns_structured_error(store_with_meeting) -> None:
 
 
 def test_post_success_path(store_with_meeting, monkeypatch) -> None:
-    """Simulate a 200 OK from Slack and check we surface that."""
+    """A 200 OK from Slack is surfaced as a successful result."""
     store, mid = store_with_meeting
     captured: dict[str, Any] = {}
 

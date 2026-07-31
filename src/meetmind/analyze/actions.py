@@ -1,23 +1,8 @@
-"""Action-item extraction with verbatim-citation guard.
+"""Action-item extraction with a verbatim-citation guard.
 
-Workflow:
-
-  1. The pipeline calls `extract_action_items(transcript_window, llm)`.
-  2. `llm` is any callable that returns a `dict` matching the `ExtractionPayload`
-     schema. In production this is `actants` → Ollama with grammar-constrained
-     JSON output. For tests it's a `MockLLM` that returns whatever fixture the
-     test sets up.
-  3. We validate every item's `evidence_quote` is a substring of the
-     transcript window. The architecture documents this single check as
-     killing ~80% of hallucinated extractions.
-  4. We then validate `owner` (if a speaker_id) and `deadline` (if any).
-  5. Items that fail any validation are dropped with a logged reason. The
-     remaining items are returned with stable IDs and an `open` status.
-
-The same pattern (substring guard) is reused for closure detection — the
-LLM is asked "did this transcript close action item X?" and if it
-returns `closed=True`, the `closed_evidence_quote` must be a substring
-of the closing meeting's transcript.
+Every extracted item's `evidence_quote` must be a substring of the transcript
+window; items that fail are dropped with a logged reason. Closure detection
+applies the same guard.
 """
 
 from __future__ import annotations
@@ -55,7 +40,6 @@ class ExtractionResult:
     rejected: list[tuple[ExtractedItem, str]]
 
 
-# Type alias for any callable that returns the extraction payload.
 LLMCallable = Callable[[str], dict[str, Any]]
 
 
@@ -87,13 +71,8 @@ def extract_action_items(
 ) -> ExtractionResult:
     """Run the LLM extraction and validate against the substring guard.
 
-    `llm` receives the full prompt body (system + user) joined by newlines
-    and returns a JSON-decoded dict. Production wrappers handle Ollama
-    `format=schema` constrained decoding.
-
-    Returns an `ExtractionResult` with `accepted` (validated `ActionItem`s
-    ready to upsert) and `rejected` (items that failed any guard, with a
-    one-line reason for the audit log).
+    Returns accepted `ActionItem`s ready to upsert, plus rejected items paired
+    with a one-line reason for the audit log.
     """
     prompt = SYSTEM_PROMPT + "\n" + build_user_prompt(transcript_window)
     raw = llm(prompt)
@@ -133,11 +112,6 @@ def _validate(item: ExtractedItem, transcript_window: str) -> str | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Closure detection
-# ---------------------------------------------------------------------------
-
-
 class ClosurePayload(BaseModel):
     closed: bool
     evidence_quote: str | None = None
@@ -151,11 +125,8 @@ def detect_closure(
 ) -> ClosurePayload:
     """Ask the LLM whether `transcript_window` closes `open_action`.
 
-    Same substring guard: if the LLM returns `closed=True` with an
-    `evidence_quote` that isn't actually in the transcript, we treat the
-    answer as `closed=False`. This converts hallucinated closures into
-    quiet passes — better to leave an item open than to falsely mark it
-    done.
+    A `closed=True` answer whose `evidence_quote` is not in the transcript is
+    downgraded to `closed=False`: leaving an item open beats falsely closing it.
     """
     prompt = (
         "You are a faithful action-item closure judge. Output JSON: "
@@ -177,18 +148,8 @@ def detect_closure(
     return payload
 
 
-# ---------------------------------------------------------------------------
-# Mock LLM for tests
-# ---------------------------------------------------------------------------
-
-
 class MockLLM:
-    """Trivial LLM stand-in: returns whatever responses are queued.
-
-    Use:
-        llm = MockLLM([{"items": [...]}])
-        result = extract_action_items(text, llm)
-    """
+    """LLM stand-in for tests: returns queued responses in order."""
 
     def __init__(self, responses: Iterable[dict[str, Any]]) -> None:
         self._responses = list(responses)

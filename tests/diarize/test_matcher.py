@@ -129,15 +129,10 @@ def test_priors_bias_match_when_cosines_are_close():
 
 def test_should_update_gates_on_quality_signals():
     matcher = Matcher()
-    # All signals good → should update.
     assert matcher.should_update(cos=0.7, snr_db=20.0, duration_seconds=3.0) is True
-    # Cos too low → no update.
     assert matcher.should_update(cos=0.6, snr_db=20.0, duration_seconds=3.0) is False
-    # Duration too short → no update.
     assert matcher.should_update(cos=0.7, snr_db=20.0, duration_seconds=2.0) is False
-    # Noisy → no update.
     assert matcher.should_update(cos=0.7, snr_db=5.0, duration_seconds=3.0) is False
-    # SNR not measured → no SNR gate.
     assert matcher.should_update(cos=0.7, snr_db=None, duration_seconds=3.0) is True
 
 

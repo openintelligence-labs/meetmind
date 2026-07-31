@@ -1,23 +1,10 @@
-"""Channel-prior gate.
+"""Channel-prior gate for diarization output.
 
-When mic + loopback are kept separate end-to-end, diarization gets a
-free accuracy boost from the channel of origin. The
-mic stream is, by construction, a single speaker (the user). The
-loopback stream contains everyone else.
-
-`ChannelPrior` does two things:
-
-  1. **Relabel** — replace opaque cluster ids with `self` / `remote-<X>`
-     based purely on the originating channel.
-  2. **Override** — when both per-segment mic and loopback RMS are
-     known, flip the label if one channel dominates the other by more
-     than `override_margin_db`. This catches the specific failure mode
-     where the capture sidecar mis-routed energy (e.g. system audio
-     leaked into the mic and got labelled as `remote` by the diarizer).
-
-The override is the documented "free 30%" wedge: it rescues the
-self/remote confusions that are the worst error class in real laptop
-meeting apps.
+Keeping mic and loopback separate end-to-end makes the channel of origin a
+strong prior: the mic stream is a single speaker by construction, the loopback
+stream is everyone else. `ChannelPrior` relabels cluster ids accordingly, and
+can override the diarizer's attribution when per-channel RMS shows one channel
+dominating — the case where the capture sidecar mis-routed energy.
 """
 
 from __future__ import annotations

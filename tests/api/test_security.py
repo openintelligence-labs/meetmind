@@ -1,9 +1,5 @@
-"""Security posture tests (Task #12).
-
-Three layers:
-  1. CORS narrows to the bound port when supplied.
-  2. Token file lands at mode 0600 (read/write owner only).
-  3. The outbound-call refusal stays green in default config.
+"""Security posture tests: CORS narrowing to the bound port, owner-only
+permissions on the token file, and outbound-call refusal in default config.
 """
 
 from __future__ import annotations
@@ -57,7 +53,6 @@ def test_token_file_mode_is_0600(tmp_path: Path) -> None:
         # Owner-only read/write. Group/other bits must be zero.
         mode = st.st_mode & 0o777
         assert mode == 0o600, oct(mode)
-    # And: must actually be readable by the owner.
     assert target.read_text("ascii") == "a-test-token"
 
 
@@ -65,7 +60,7 @@ def test_token_file_overwrite_preserves_0600(tmp_path: Path) -> None:
     """O_TRUNC reuse must not widen perms."""
     target = tmp_path / "token2"
     write_token("first", path=target)
-    # Touch with broader perms to confirm we narrow back.
+    # Widen the perms first to confirm the rewrite narrows them again.
     if sys.platform == "win32":
         # chmod can't widen a Windows DACL — grant Everyone explicitly,
         # then confirm the rewrite strips it back to owner-only.
@@ -163,14 +158,11 @@ def test_default_config_makes_no_outbound_socket(monkeypatch) -> None:
 
 
 def test_handshake_token_loopback_only() -> None:
-    """Document the loopback-only handshake contract via the regex test
-    above + this app-level assertion."""
+    """Document the loopback-only handshake contract at the app level."""
     app = create_app("loopback-token", port=7857)
     client = TestClient(app)
-    # We can't easily fake `request.client.host` with TestClient — it
-    # always reports "testclient" — but we can verify the route exists
-    # and that it 403s unless we monkeypatch. The 403 path is covered
-    # by test_handshake_rejects_non_loopback above.
+    # TestClient always reports host "testclient", so the 403 path itself is
+    # covered by test_handshake_rejects_non_loopback above.
     r = client.get("/v1/health")
     assert r.status_code == 200
 

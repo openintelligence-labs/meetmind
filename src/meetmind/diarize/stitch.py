@@ -1,24 +1,10 @@
-"""Stitcher: align STT outputs with diarization → speaker-attributed transcript.
+"""Align STT `Final` spans with diarization segments into a speaker-attributed
+transcript.
 
-Inputs:
-  • STT `Final` spans (start_ms, end_ms, text, language, confidence).
-  • Diarization `DiarSegment`s (start_ms, end_ms, cluster_id, channel).
-
-Outputs:
-  • A list of `SpeakerSegment`s carrying both the speaker id and the
-    text. STT spans that cross a diarization boundary are split
-    proportionally by the relative overlap; STT spans with no
-    overlapping diarization get the cluster id "unknown".
-
-Splitting is character-proportional, not duration-proportional. This is
-intentional: word boundaries inside an STT span are unknown to us at
-this stage, and characters track speech density better than wall-clock
-time (long pauses inflate end_ms - start_ms without producing more
-text).
-
-Channel-prior fusion is applied **before** the stitcher: the diar
-segments come in pre-relabelled to `self` / `remote-X`. The stitcher
-itself is channel-agnostic.
+Splitting across a diarization boundary is character-proportional rather than
+duration-proportional: word boundaries inside a span are not known at this
+stage, and characters track speech density better than wall-clock time, which
+long pauses inflate.
 """
 
 from __future__ import annotations
@@ -35,10 +21,8 @@ from meetmind.stt.base import Final
 class SpeakerSegment:
     """One contiguous span of speech by a single speaker.
 
-    `cluster_id` is the diarization label (post-channel-prior, so
-    typically `self` / `remote-A` / `unknown`). `speaker_id` resolves
-    cluster→identity once voiceprint enrollment lands in v0.9; until
-    then it mirrors `cluster_id`.
+    `cluster_id` is the diarization label, post-channel-prior: typically
+    `self`, `remote-A` or `unknown`.
     """
 
     start_ms: int
@@ -65,9 +49,7 @@ def stitch(
 ) -> list[SpeakerSegment]:
     """Align Finals with DiarSegments, splitting where boundaries cross.
 
-    Both inputs are eagerly materialized — this is for post-meeting and
-    post-burst use; the streaming variant lives in `stitch_streaming`.
-    Outputs are sorted by `start_ms`.
+    Both inputs are eagerly materialized. Output is sorted by `start_ms`.
     """
     finals_list = sorted(finals, key=lambda f: f.start_ms)
     diars_list = sorted(diars, key=lambda d: d.start_ms)
@@ -78,7 +60,6 @@ def stitch(
         if not fin.text:
             continue
 
-        # All diar segments overlapping this Final.
         overlapping = [
             d for d in diars_list if _overlap_ms(fin.start_ms, fin.end_ms, d.start_ms, d.end_ms) > 0
         ]
@@ -92,8 +73,6 @@ def stitch(
             out.append(_seg_from_final(fin, d.cluster_id, d.channel, d.confidence))
             continue
 
-        # Multiple diarization segments overlap. Split the Final's text
-        # character-proportionally to the overlap with each diar slice.
         total_overlap = sum(
             _overlap_ms(fin.start_ms, fin.end_ms, d.start_ms, d.end_ms) for d in overlapping
         )
@@ -109,7 +88,7 @@ def stitch(
             ov = _overlap_ms(fin.start_ms, fin.end_ms, d.start_ms, d.end_ms)
             share = ov / total_overlap
             if i == len(overlapping) - 1:
-                # Last slice: take remainder so we don't lose chars to rounding.
+                # Last slice takes the remainder, so rounding never drops chars.
                 slice_chars = text_len - accum_chars
                 slice_ms = (fin.end_ms - fin.start_ms) - accum_ms
             else:
