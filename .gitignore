@@ -1,5 +1,8 @@
 # ─── architecture docs (uncooked — kept local until polished) ───
-docs/
+# Exception: the capture sidecar IPC spec is referenced from sidecars/macos/README.md,
+# so it has to ship with the clone.
+docs/*
+!docs/SPEC_CAPTURE_IPC.md
 
 # ─── local tooling config ───
 .claude/
