@@ -29,10 +29,11 @@ from meetmind.api.bus import EventBus, default_bus
 from meetmind.api.events import Event
 from meetmind.memory.store import Store
 
-# Static overlay UI, resolved relative to the repo root. An installed wheel
-# ships it under ``meetmind/_ui/`` instead and resolves via
-# ``importlib.resources``, so this path is dev-layout-specific.
-UI_DIR = Path(__file__).resolve().parents[3] / "tauri" / "ui"
+# Static overlay UI. The assets live inside the package rather than beside it,
+# so a source checkout and an installed wheel resolve to the same directory and
+# there is no build step that can be forgotten. `package-data` in pyproject.toml
+# is what carries them into the wheel.
+UI_DIR = Path(__file__).resolve().parent.parent / "_ui"
 
 log = logging.getLogger(__name__)
 
