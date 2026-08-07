@@ -23,7 +23,7 @@ always-on-top window). The full Tauri shell lives in
    cat ~/.meetmind/token
    ```
 
-3. Open `tauri/ui/index.html` directly in any browser, paste the token,
+3. Open `src/meetmind/_ui/index.html` directly in any browser, paste the token,
    click **Connect**.
 
 `localStorage` remembers the endpoint + token across reloads.

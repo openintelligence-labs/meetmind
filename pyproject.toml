@@ -71,6 +71,12 @@ meetmind = "meetmind.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# The dashboard's static assets live inside the package at src/meetmind/_ui/.
+# Without this, they are excluded from the wheel and `meetmind ui` opens a
+# blank page after `pip install` while working fine in a checkout.
+[tool.setuptools.package-data]
+meetmind = ["_ui/*", "_ui/**/*"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

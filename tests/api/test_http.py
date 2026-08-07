@@ -302,15 +302,17 @@ async def test_compliance_status_endpoint(app_and_client, tmp_path, monkeypatch)
         assert "raw" in body["redaction_profiles"]
 
 
-async def test_static_ui_is_mounted_when_present(app_and_client):
-    """When the tauri/ui directory is present, the index page is served at /.
+async def test_static_ui_is_mounted(app_and_client):
+    """The dashboard is served at / — from a checkout and from a wheel alike.
 
-    Skipped in an installed wheel, which does not package the UI files.
+    This previously skipped when the assets were missing, which is exactly how
+    a wheel that shipped no dashboard passed CI. The assets now live inside the
+    package, so their absence is a real failure rather than a skip.
     """
     from meetmind.api.http import UI_DIR
 
-    if not UI_DIR.is_dir():
-        pytest.skip("tauri/ui not present in this checkout")
+    assert UI_DIR.is_dir(), f"dashboard assets missing from the package at {UI_DIR}"
+    assert (UI_DIR / "index.html").is_file()
 
     _, _, _, transport = app_and_client
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
@@ -319,6 +321,15 @@ async def test_static_ui_is_mounted_when_present(app_and_client):
         body = resp.text.lower()
         assert "meetmind" in body
         assert "<script" in body
+
+
+async def test_static_ui_assets_are_served(app_and_client):
+    """The mounted asset routes resolve, not just the index page."""
+    _, _, _, transport = app_and_client
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        for asset in ("app.js", "dashboard.js", "styles.css"):
+            resp = await c.get(f"/static/{asset}")
+            assert resp.status_code == 200, f"/static/{asset} returned {resp.status_code}"
 
 
 @pytest.mark.timeout(10)
